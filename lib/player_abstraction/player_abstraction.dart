@@ -27,6 +27,7 @@ import './abstract_player.dart'
 import './player_enums.dart' as core_enums; // Alias for our pure enums
 import './player_data_models.dart';
 import './player_factory.dart'; // Import PlayerFactory directly
+import './lazy_player_delegate.dart';
 import './mdk_player_adapter.dart'; // 导入具体适配器类
 import './video_player_adapter.dart'; // 导入具体适配器类
 import './media_kit_player_adapter.dart'; // 导入MediaKit适配器类
@@ -50,9 +51,13 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   /// Factory constructor that allows `Player()` to be called.
   /// This is what `VideoPlayerState` will use, e.g., `Player player = Player();`.
+  ///
+  /// Returns a lazily-materialized player: the real kernel (mdk-sdk /
+  /// libmpv / Erika native library + decoder pools) is only loaded when a
+  /// media is actually opened, cutting idle startup memory by the full
+  /// kernel footprint.
   factory Player() {
-    // PlayerFactory 会自动从 SharedPreferences 读取播放器内核设置
-    return Player._internal(PlayerFactory().createPlayer());
+    return Player._internal(LazyPlayerDelegate(PlayerFactory()));
   }
 
   @visibleForTesting
