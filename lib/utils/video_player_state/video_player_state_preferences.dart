@@ -2022,11 +2022,11 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     // 滑块只管内嵌轨（含 libmpv 内核轨 sub-pos）；外挂叠层字幕块由
     // 长按拖动逐条定位，滑块不再同步覆盖各 path 的位置。
     _subtitleManager.globalPositionSeed = resolved;
-    // 叠层字幕位置在 Flutter UI 层，不碰内核 sub-margin/sub-pos（MediaKit 限制0~300且报错）
-    if (!shouldRenderCurrentExternalSubtitleInApp()) {
+    // 外挂叠层(SRT/VTT)位置在 Flutter UI 层，不碰内核 sub-margin/sub-pos；
+    // 但混挂叠层时内嵌轨仍在内核渲染，必须继续下发 sub-pos——否则滑块
+    // 拖不动内嵌字幕。applySubtitleStylePreference 内部有守卫：仅当内核
+    // 侧有内嵌轨/内核外挂轨时才写内核属性。
     await applySubtitleStylePreference();
-
-    }
     _refreshSubtitleLayout();
     _notifyListeners();
   }
@@ -2058,11 +2058,9 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     await prefs.setDouble(_subtitleMarginXKey, value);
     _subtitleManager.globalMarginSeed = value;
     // 水平边距滑块同样只管内嵌轨，不覆盖外挂叠层块的独立摆位。
-    // 叠层字幕位置在 Flutter UI 层，不碰内核 sub-margin/sub-pos（MediaKit 限制0~300且报错）
-    if (!shouldRenderCurrentExternalSubtitleInApp()) {
+    // 外挂叠层位置在 Flutter UI 层；混挂时内嵌轨仍走内核属性，
+    // 守卫逻辑见 applySubtitleStylePreference。
     await applySubtitleStylePreference();
-
-    }
     _refreshSubtitleLayout();
     _notifyListeners();
   }
@@ -2072,11 +2070,9 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     _subtitleMarginY = value;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setDouble(_subtitleMarginYKey, value);
-    // 叠层字幕位置在 Flutter UI 层，不碰内核 sub-margin/sub-pos（MediaKit 限制0~300且报错）
-    if (!shouldRenderCurrentExternalSubtitleInApp()) {
+    // 外挂叠层位置在 Flutter UI 层；混挂时内嵌轨仍走内核属性，
+    // 守卫逻辑见 applySubtitleStylePreference。
     await applySubtitleStylePreference();
-
-    }
     _refreshSubtitleLayout();
     _notifyListeners();
   }
