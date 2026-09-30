@@ -808,14 +808,22 @@ class WindowsOpenGLVideoRenderer {
     const int height =
         std::max(1, static_cast<int>(client_rect.bottom - client_rect.top));
 
-    if (!::wglMakeCurrent(dc_, gl_context_)) {
-      LogRenderFailure("wglMakeCurrent", ::GetLastError());
-      return;
+    // The GL context is only ever current on this dedicated render thread, so
+    // wglMakeCurrent is needed once, not per frame. glClear is likewise
+    // redundant: mpv_render_context_render covers the full FBO every frame.
+    if (!current_on_this_thread_) {
+      if (!::wglMakeCurrent(dc_, gl_context_)) {
+        LogRenderFailure("wglMakeCurrent", ::GetLastError());
+        return;
+      }
+      current_on_this_thread_ = true;
     }
 
-    ::glViewport(0, 0, width, height);
-    ::glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    ::glClear(GL_COLOR_BUFFER_BIT);
+    if (width != last_viewport_width_ || height != last_viewport_height_) {
+      ::glViewport(0, 0, width, height);
+      last_viewport_width_ = width;
+      last_viewport_height_ = height;
+    }
 
     const uint64_t update_flags =
         ::mpv_render_context_update(render_context_);
@@ -900,6 +908,7 @@ class WindowsOpenGLVideoRenderer {
     }
     if (gl_context_ != nullptr) {
       ::wglMakeCurrent(nullptr, nullptr);
+      current_on_this_thread_ = false;
       ::wglDeleteContext(gl_context_);
       gl_context_ = nullptr;
     }
@@ -949,6 +958,9 @@ class WindowsOpenGLVideoRenderer {
   bool stop_render_thread_ = false;
   uint64_t rendered_frames_ = 0;
   uint64_t render_failures_ = 0;
+  bool current_on_this_thread_ = false;
+  int last_viewport_width_ = -1;
+  int last_viewport_height_ = -1;
 };
 
 namespace {
