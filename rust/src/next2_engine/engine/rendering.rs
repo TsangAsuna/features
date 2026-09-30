@@ -509,7 +509,13 @@ impl Next2GlyphAtlas {
         let fonts = std::sync::Arc::new(load_font_chain(custom_font)?);
 
         let max_dim = device.limits().max_texture_dimension_2d;
-        let atlas_size = BASE_ATLAS_SIZE.min(max_dim);
+        // 8192² RGBA8 = 256 MiB resident for the whole playback session, which
+        // dominates the engine's memory footprint. MSDF stays sharp when the
+        // atlas is scaled down because glyph coverage is resolution
+        // independent — 4096² (64 MiB) keeps the same effective quality for
+        // the danmaku font sizes this engine renders (≤72 px), and the
+        // packer evicts/rewrites glyphs when full either way.
+        let atlas_size = 4096.min(BASE_ATLAS_SIZE).min(max_dim);
 
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("next2 msdf atlas"),
