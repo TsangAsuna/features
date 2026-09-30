@@ -418,10 +418,14 @@ class _DfmPlusOverlayState extends State<DfmPlusOverlay>
         return Next2OverlayViewport.buildLayer(
           layoutSize: layoutSize,
           constrainedSize: constrainedSize,
-          child: Opacity(
-            opacity: widget.opacity.clamp(0.0, 1.0).toDouble(),
-            child: content,
-          ),
+          // 全不透明时直接返回 content：常驻 Opacity 会在 raster 线程对整块
+          // 弹幕纹理强制 saveLayer（全屏合成开销），opacity==1 时毫无必要。
+          child: widget.opacity >= 1.0
+              ? content
+              : Opacity(
+                  opacity: widget.opacity.clamp(0.0, 1.0).toDouble(),
+                  child: content,
+                ),
         );
       },
     );
