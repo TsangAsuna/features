@@ -68,7 +68,8 @@ jobs:
     if: needs.Gatekeeper.outputs.triggered == 'true'
     uses: ./.github/workflows/build-ios.yml
     with:
-      upload-to-app-store: true
+      # Build a signed IPA only; App Store Connect upload is disabled in this repo.
+      upload-to-app-store: false
     secrets:
       IOS_DISTRIBUTION_CERTIFICATE_BASE64: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_BASE64 }}
       IOS_DISTRIBUTION_CERTIFICATE_PASSWORD: ${{ secrets.IOS_DISTRIBUTION_CERTIFICATE_PASSWORD }}
@@ -428,7 +429,8 @@ jobs:
   Publish-iOS-App-Store:
     name: Publish iOS to App Store Connect
     needs: [Publish, Build-iOS]
-    if: success()
+    # Disabled in this repo: builds must not upload to App Store.
+    if: false
     runs-on: macos-26
     timeout-minutes: 120
     permissions:
