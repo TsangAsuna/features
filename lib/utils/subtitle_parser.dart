@@ -107,6 +107,11 @@ class SubtitleParser {
   static final RegExp _microdvdPattern =
       RegExp(r'^\s*\{(\d+)\}\{(\d+)\}', multiLine: true);
 
+  /// SSA/ASS 覆盖标记（{\an8} 顶中、{\i1} 斜体、{\pos(960,40)} 等）。
+  /// SRT/SubViewer 走 App 叠层纯文本渲染，这类标记不会被解释、会原样
+  /// 显示成乱码；内嵌轨的同类标记由内核 libass 解释，不经过此路径。
+  static final RegExp _ssaOverrideTagPattern = RegExp(r'\{\\[^}]*\}');
+
   static const List<String> _fallbackEncodings = [
     'utf-16le',
     'utf-16be',
@@ -776,6 +781,49 @@ class SubtitleParser {
     );
   }
 
+  /// SRT/SubViewer 文本剥离 SSA/ASS 覆盖标记（{\an8} 等）。C++ 原生与
+  /// Dart 两条解析路径都不处理这类标记，统一在 parseSubtitleFile 出口
+  /// 剥离：纯文本叠层渲染不再显示乱码；整条剥空的时间轴直接丢弃。
+  /// 只剥含反斜杠的 {\\...} 块——普通花括号文本（{笑}）不受影响。
+  static SubtitleParseResult _stripOverrideTagsForPlainText(
+      SubtitleParseResult result) {
+    if (result.format != SubtitleFormat.srt &&
+        result.format != SubtitleFormat.subViewer) {
+      return result;
+    }
+    var changed = false;
+    final cleaned = <SubtitleEntry>[];
+    for (final entry in result.entries) {
+      final text = entry.content;
+      if (!text.contains('{')) {
+        cleaned.add(entry);
+        continue;
+      }
+      final stripped = text.replaceAll(_ssaOverrideTagPattern, '').trim();
+      if (stripped == text) {
+        cleaned.add(entry);
+        continue;
+      }
+      changed = true;
+      if (stripped.isEmpty) continue;
+      cleaned.add(SubtitleEntry(
+        startTimeMs: entry.startTimeMs,
+        endTimeMs: entry.endTimeMs,
+        content: stripped,
+        style: entry.style,
+        layer: entry.layer,
+        name: entry.name,
+        effect: entry.effect,
+      ));
+    }
+    if (!changed) return result;
+    return SubtitleParseResult(
+      entries: cleaned,
+      format: result.format,
+      encoding: result.encoding,
+    );
+  }
+
   static Future<SubtitleParseResult> parseSubtitleFile(String filePath,
       {bool allowUnknownFormat = false}) async {
     try {
@@ -804,7 +852,7 @@ class SubtitleParser {
                 (bytes: bytes, hintPath: filePath) as _SubtitleIsolateInput,
               );
             }
-            if (nativeResult != null) {
+              if (nativeResult != null) {
               final result = _fromNativeResult(nativeResult);
               // 防御性检查: C++ 返回 0 条目但文件非空 → 可能编码转换失败
               if (result.entries.isNotEmpty ||
@@ -814,7 +862,7 @@ class SubtitleParser {
                     '格式=${result.format.name}, '
                     '编码=${result.encoding}, '
                     '文件=$filePath');
-                return result;
+                return _stripOverrideTagsForPlainText(result);
               }
               _log('[SubtitleParser] C++ 返回空结果, fallback 到 Dart: 文件=$filePath');
             } else {
@@ -868,11 +916,11 @@ class SubtitleParser {
           '格式=${format.name}, '
           '编码=${decoded.encoding}, '
           '文件=$filePath');
-      return SubtitleParseResult(
+      return _stripOverrideTagsForPlainText(SubtitleParseResult(
         entries: entries,
         format: format,
         encoding: decoded.encoding,
-      );
+      ));
     } catch (e) {
       _log('[SubtitleParser] 解析字幕文件出错: $e');
       return const SubtitleParseResult(
