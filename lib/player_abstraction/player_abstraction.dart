@@ -361,7 +361,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   bool get prefersPlatformVideoSurface {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final value = dyn.prefersPlatformVideoSurface;
       if (value is bool) {
         return value;
@@ -372,7 +372,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   bool get usesWindowOverlayVideoSurface {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final value = dyn.usesWindowOverlayVideoSurface;
       if (value is bool) {
         return value;
@@ -387,7 +387,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
     int? platformViewId,
   }) async {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final future = dyn.attachPlatformVideoSurface(
         viewHandle: viewHandle,
         windowHandle: windowHandle,
@@ -408,7 +408,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   Future<void> detachPlatformVideoSurface({int? platformViewId}) async {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final future = dyn.detachPlatformVideoSurface(
         platformViewId: platformViewId,
       );
@@ -431,7 +431,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
     ValueChanged<Rect?>? onFrameRectChanged,
   }) {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final surface = dyn.buildPlatformVideoSurface(
         debugLabel: debugLabel,
         onPlatformViewIdChanged: onPlatformViewIdChanged,
@@ -449,15 +449,31 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
     }
   }
 
+  /// 实际承载播放器能力的 delegate：懒包装已 materialize 时返回真实内核
+  /// adapter，未 materialize 时返回懒包装本身（惰性默认值）。
+  /// 内核身份（getPlayerKernelName）与鸭子类型能力探测（upscaler / 原生
+  /// 弹幕 / 平台视频面 / videoPlayerController 等 `as dynamic` 探测）都定义
+  /// 在真实 adapter 上、懒包装不透传——这些读取必须穿透包装，否则 Media
+  /// Kit / MDK / Erika 会被当成"未知"内核（字幕设置菜单塌缩成仅字号、
+  /// applySubtitleStylePreference 守卫早退等）。
+  core_player.AbstractPlayer get _effectiveDelegate {
+    final delegate = _delegate;
+    if (delegate is LazyPlayerDelegate) {
+      return delegate.realized ?? delegate;
+    }
+    return delegate;
+  }
+
   // 获取当前使用的播放器内核类型的名称
   String getPlayerKernelName() {
-    if (_delegate is MdkPlayerAdapter) {
+    final delegate = _effectiveDelegate;
+    if (delegate is MdkPlayerAdapter) {
       return "MDK";
-    } else if (_delegate is VideoPlayerAdapter) {
+    } else if (delegate is VideoPlayerAdapter) {
       return "Video Player";
-    } else if (_delegate is MediaKitPlayerAdapter) {
+    } else if (delegate is MediaKitPlayerAdapter) {
       return "Media Kit";
-    } else if (_delegate is ErikaPlayerAdapter) {
+    } else if (delegate is ErikaPlayerAdapter) {
       return "Erika";
     } else {
       return "未知";
@@ -466,7 +482,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   VideoPlayerController? get videoPlayerController {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final ctrl = dyn.controller;
       if (ctrl is VideoPlayerController) return ctrl;
     } catch (_) {}
@@ -481,7 +497,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
   // 若底层未实现，则返回空映射。
   Map<String, dynamic> getDetailedMediaInfo() {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final info = dyn.getDetailedMediaInfo?.call();
       if (info is Map<String, dynamic>) return info;
     } catch (_) {}
@@ -491,7 +507,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
   // 异步版本：允许底层等待获取属性（例如 mpv 的 getProperty 通常是异步的）
   Future<Map<String, dynamic>> getDetailedMediaInfoAsync() async {
     try {
-      final dyn = _delegate as dynamic;
+      final dyn = _effectiveDelegate as dynamic;
       final f = dyn.getDetailedMediaInfoAsync?.call();
       if (f is Future) {
         final info = await f;
@@ -504,7 +520,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   bool get supportsUpscaler {
     try {
-      final value = (_delegate as dynamic).supportsUpscaler;
+      final value = (_effectiveDelegate as dynamic).supportsUpscaler;
       return value is bool ? value : false;
     } catch (_) {
       return false;
@@ -513,7 +529,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   Future<void> setUpscaler(PlayerUpscalerMode mode) async {
     try {
-      final result = (_delegate as dynamic).setUpscaler(mode);
+      final result = (_effectiveDelegate as dynamic).setUpscaler(mode);
       if (result is Future) {
         await result;
       }
@@ -522,7 +538,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   Future<PlayerUpscalerStatus?> getUpscalerStatus() async {
     try {
-      final result = (_delegate as dynamic).getUpscalerStatus();
+      final result = (_effectiveDelegate as dynamic).getUpscalerStatus();
       final status = result is Future ? await result : result;
       if (status is PlayerUpscalerStatus) {
         return status;
@@ -538,7 +554,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   bool get supportsNativeDanmaku {
     try {
-      final v = (_delegate as dynamic).supportsNativeDanmaku;
+      final v = (_effectiveDelegate as dynamic).supportsNativeDanmaku;
       return v is bool ? v : false;
     } catch (_) {
       return false;
@@ -547,21 +563,21 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   Future<void> loadNativeDanmaku(List<Map<String, dynamic>> danmakuList) async {
     try {
-      final r = (_delegate as dynamic).loadDanmakuList(danmakuList);
+      final r = (_effectiveDelegate as dynamic).loadDanmakuList(danmakuList);
       if (r is Future) await r;
     } catch (_) {}
   }
 
   Future<void> clearNativeDanmaku() async {
     try {
-      final r = (_delegate as dynamic).clearDanmaku();
+      final r = (_effectiveDelegate as dynamic).clearDanmaku();
       if (r is Future) await r;
     } catch (_) {}
   }
 
   Future<void> setNativeDanmakuEnabled(bool enabled) async {
     try {
-      final r = (_delegate as dynamic).setDanmakuEnabled(enabled);
+      final r = (_effectiveDelegate as dynamic).setDanmakuEnabled(enabled);
       if (r is Future) await r;
     } catch (_) {}
   }
@@ -581,7 +597,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
     String? customFontFilePath,
   }) async {
     try {
-      final r = (_delegate as dynamic).setDanmakuConfig(
+      final r = (_effectiveDelegate as dynamic).setDanmakuConfig(
         enabled: enabled,
         opacity: opacity,
         fontSize: fontSize,
@@ -601,7 +617,7 @@ class Player implements core_player.AsyncExternalSubtitlePlayer {
 
   Future<void> setNativeDanmakuGlobalOffset(Duration offset) async {
     try {
-      final r = (_delegate as dynamic).setDanmakuGlobalOffset(offset);
+      final r = (_effectiveDelegate as dynamic).setDanmakuGlobalOffset(offset);
       if (r is Future) await r;
     } catch (_) {}
   }
