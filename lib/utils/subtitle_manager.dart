@@ -38,6 +38,10 @@ class SubtitleManager extends ChangeNotifier {
   final Map<String, Map<String, dynamic>> _subtitleTrackInfo = {};
   final Map<String, List<dynamic>> _subtitleCache = {};
 
+  /// [某字幕路径] 最近一次查询的结果缓存：命中窗口内直接返回文本，
+  /// 避免每帧二分/扫描。entries 与 _subtitleCache 同引用时才可信。
+  final Map<String, _SubtitleLookupResult> _subtitleLookupCache = {};
+
   /// 缓存指纹：path -> "size:mtime"，用于检测字幕文件内容变化
   final Map<String, String> _subtitleCacheFingerprint = {};
   int _subtitleLoadToken = 0;
@@ -934,23 +938,54 @@ class SubtitleManager extends ChangeNotifier {
       return '';
     }
 
-    final activeContents = <String>[];
-    for (final entry in cachedEntries) {
-      if (entry is! SubtitleEntry) {
-        continue;
-      }
-      if (positionMs < entry.startTimeMs || positionMs > entry.endTimeMs) {
-        continue;
-      }
-
-      final content = entry.content.trim();
-      if (content.isEmpty || activeContents.contains(content)) {
-        continue;
-      }
-      activeContents.add(content);
+    // 热路径（每 vsync 被 ExternalSubtitleOverlay 调用）：
+    // 缓存条目已按 startTimeMs 排序（Dart/C++ 解析路径均保证），
+    // 用二分定位窗口起点 + 结果缓存，替代每帧 O(n) 全量线性扫描。
+    final cachedResult = _subtitleLookupCache[path];
+    if (cachedResult != null &&
+        identical(cachedResult.entries, cachedEntries) &&
+        positionMs >= cachedResult.fromMs &&
+        positionMs <= cachedResult.toMs) {
+      return cachedResult.text;
     }
 
-    return activeContents.join('\n');
+    final activeContents = <String>[];
+    // 二分找第一条 endTimeMs >= positionMs 的条目：更早的条目不可能覆盖
+    // 当前时间点（endTimeMs 随 startTimeMs 单调不减——同一条目自身除外）。
+    var lo = 0;
+    var hi = cachedEntries.length;
+    while (lo < hi) {
+      final mid = (lo + hi) >> 1;
+      final entry = cachedEntries[mid];
+      final endMs = entry is SubtitleEntry ? entry.endTimeMs : 0;
+      if (endMs < positionMs) {
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+
+    var windowEndMs = positionMs;
+    for (var i = lo; i < cachedEntries.length; i++) {
+      final entry = cachedEntries[i];
+      if (entry is! SubtitleEntry) continue;
+      if (entry.startTimeMs > positionMs) break;
+      if (entry.endTimeMs < positionMs) continue;
+      final content = entry.content.trim();
+      if (content.isEmpty || activeContents.contains(content)) continue;
+      activeContents.add(content);
+      // 覆盖当前时间点的条目中最早结束者决定结果有效窗口的上界
+      if (entry.endTimeMs < windowEndMs) windowEndMs = entry.endTimeMs;
+    }
+
+    final text = activeContents.join('\n');
+    _subtitleLookupCache[path] = _SubtitleLookupResult(
+      entries: cachedEntries,
+      fromMs: positionMs,
+      toMs: windowEndMs,
+      text: text,
+    );
+    return text;
   }
 
   List<String> _snapshotCurrentSubtitleTrackSignatures() {
@@ -2234,4 +2269,21 @@ class _StackCandidate {
   final String name;
   final String? path;
   final RemoteSubtitleCandidate? remote;
+}
+
+/// [某字幕路径] 最近一次 _textAtPath 查询的缓存行。
+/// [fromMs, toMs] 是这段文本确定有效的播放时间窗口（窗口内 O(1) 命中）；
+/// [entries] 必须与 _subtitleCache 中该路径的列表同引用，缓存重载后失效。
+class _SubtitleLookupResult {
+  final List<dynamic> entries;
+  final int fromMs;
+  final int toMs;
+  final String text;
+
+  const _SubtitleLookupResult({
+    required this.entries,
+    required this.fromMs,
+    required this.toMs,
+    required this.text,
+  });
 }
