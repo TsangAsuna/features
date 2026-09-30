@@ -377,6 +377,14 @@ class MediaKitPlayerAdapter
       userAgent: '',
       httpProxy: _httpProxy,
     );
+    // media_kit sizes the demuxer back-buffer equal to the forward cache
+    // (32 MB default each). The back buffer only serves small backward seeks;
+    // capping it at 8 MB halves idle remote-playback cache memory with no
+    // effect on the forward buffering window.
+    _setMpvPropertyOption(
+      'demuxer-max-back-bytes',
+      (8 * 1024 * 1024).toString(),
+    );
     _bootstrapPlatformVideoSurface();
     if (!_prefersPlatformVideoSurface) {
       _controller = VideoController(
@@ -391,6 +399,7 @@ class MediaKitPlayerAdapter
     unawaited(_setupSubtitleFonts());
     _controller?.waitUntilFirstFrameRendered.then((_) {
       _updateTextureIdFromController();
+      _logActiveHwdecOnce();
     });
     _addEventListeners();
     _setupDefaultTrackSelectionBehavior();
@@ -414,6 +423,25 @@ class MediaKitPlayerAdapter
       );
     } catch (e) {
       debugPrint('MediaKit: 设置MPV日志级别为none失败: $e');
+    }
+  }
+
+  /// One-shot post-first-frame diagnostic: logs which hwdec actually engaged
+  /// (e.g. 'videotoolbox' direct vs 'videotoolbox_copy'/'auto_copy'). This is
+  /// the verification hook for the iOS memory work — the mode can differ from
+  /// the requested one when direct interop falls back.
+  bool _activeHwdecLogged = false;
+  Future<void> _logActiveHwdecOnce() async {
+    if (_activeHwdecLogged || !Platform.isIOS) {
+      return;
+    }
+    _activeHwdecLogged = true;
+    try {
+      final value =
+          await (_player.platform as dynamic).getProperty('hwdec-current');
+      debugPrint('MediaKit: 实际生效的硬解模式 hwdec-current=$value');
+    } catch (e) {
+      debugPrint('MediaKit: 读取 hwdec-current 失败: $e');
     }
   }
 
@@ -880,6 +908,16 @@ class MediaKitPlayerAdapter
       }
       if (defaultTargetPlatform == TargetPlatform.android) {
         (_player.platform as dynamic)?.setProperty('hwdec', 'mediacodec-copy');
+      } else if (Platform.isIOS) {
+        // Direct VideoToolbox first: decoded frames stay GPU-resident instead
+        // of being copied into mpv's copy-back pool in system RAM — that pool
+        // (plus the renderer's staging) was the largest iOS playback-memory
+        // delta vs MDK. 'videotoolbox,auto' falls back through mpv's normal
+        // probing (auto → copy modes) when VT/GL interop is unavailable, so
+        // playback never hard-fails. NIPAPLAY_MPV_HWDEC still overrides.
+        (_player.platform as dynamic)?.setProperty('hwdec', 'videotoolbox,auto');
+        // Bounds the copy-mode fallback pool; direct VT ignores this option.
+        (_player.platform as dynamic)?.setProperty('hwdec-extra-frames', '2');
       } else {
         // 对于其他平台，'auto-copy' 仍然是一个好的通用选择
         (_player.platform as dynamic)?.setProperty('hwdec', 'auto-copy');
