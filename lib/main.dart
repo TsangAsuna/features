@@ -174,6 +174,11 @@ Alignment _resolveStartupWindowAlignment(
 
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Flutter defaults are 100 MiB / 1000 entries, which lets the poster wall
+  // alone consume ~100 MiB before playback starts. Cap it well below that:
+  // decoded posters are evicted and refetched from the disk cache cheaply.
+  PaintingBinding.instance.imageCache.maximumSizeBytes = 32 << 20;
+  PaintingBinding.instance.imageCache.maximumSize = 200;
   try {
     await FluentIconFontLoader.instance.ensureLoaded();
   } catch (error, stackTrace) {
@@ -516,29 +521,25 @@ void main(List<String> args) async {
     // 根据设置清理弹幕缓存
     _prepareDanmakuCachePolicy(),
 
-    // 初始化 BangumiService
-    BangumiService.instance.initialize(),
-
     // 初始化观看记录管理器
     WatchHistoryManager.initialize(),
-
-    // 初始化多端增量同步服务（Web 端暂不启用本地索引）
-    if (!kIsWeb) AutoSyncService.instance.initialize() else Future.value(),
-
-    // SMB 本地代理（用于 SMB 文件按 HTTP/Range 播放与匹配）
-    if (!kIsWeb) SMBProxyService.instance.initialize() else Future.value(),
   ]).then((results) async {
-    // BangumiService初始化完成后，检查并刷新缺少标签的缓存
-    Future.microtask(() async {
-      try {
-        await BangumiService.instance.checkAndRefreshCacheWithoutTags();
-      } catch (e) {
-        debugPrint('检查缓存标签失败: $e');
-      }
+    // 以下网络型服务不阻塞首帧：等首帧渲染完成后再初始化（冷启动内存
+    // 与启动耗时同时受益；这些服务都不在首帧渲染路径上）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!kIsWeb) AutoSyncService.instance.initialize();
+      if (!kIsWeb) SMBProxyService.instance.initialize();
+      BangumiService.instance.initialize().then((_) {
+        try {
+          BangumiService.instance.checkAndRefreshCacheWithoutTags();
+        } catch (e) {
+          debugPrint('检查缓存标签失败: $e');
+        }
+      });
+      ServerConnectivityService.instance.checkConnectivity();
     });
 
     // 服务器连接状态检测（后台执行，不阻塞启动）
-    ServerConnectivityService.instance.checkConnectivity();
 
     // 处理主题模式设置
     final settingsMap = results[2] as Map<String, dynamic>;
