@@ -1829,35 +1829,29 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     return value.clamp(0.0, 10.0).toDouble();
   }
 
-  int _subtitleOpacityToMpv(double value) {
-    return (_clampSubtitleOpacity(value) * 255).round();
+  /// ASS 样式颜色值 &HAABBGGRR（alpha 在前；00=不透明，FF=全透明）。
+  /// opacity 作为整体不透明度折算进颜色的 alpha 通道——裁剪版 libmpv
+  /// 没有 sub-opacity，透明度只能走这里。
+  String _colorToAssStyleValue(Color color, double opacity) {
+    final alpha = (255 * (1 - opacity.clamp(0.0, 1.0))).round().clamp(0, 255);
+    final rgb = color.toARGB32() & 0x00FFFFFF;
+    final argb = (alpha << 24) | rgb;
+    return '&H${argb.toRadixString(16).padLeft(8, '0').toUpperCase()}';
   }
 
-  String _colorToMpvHex(Color color) {
-    final rgb = color.value & 0x00FFFFFF;
-    return '#${rgb.toRadixString(16).padLeft(6, '0').toUpperCase()}';
-  }
-
-  String _subtitleAlignXToMpv(SubtitleAlignX align) {
-    switch (align) {
-      case SubtitleAlignX.left:
-        return 'left';
-      case SubtitleAlignX.center:
-        return 'center';
-      case SubtitleAlignX.right:
-        return 'right';
-    }
-  }
-
-  String _subtitleAlignYToMpv(SubtitleAlignY align) {
-    switch (align) {
-      case SubtitleAlignY.top:
-        return 'top';
-      case SubtitleAlignY.center:
-        return 'center';
-      case SubtitleAlignY.bottom:
-        return 'bottom';
-    }
+  /// ASS Alignment 数字键盘布局：7 8 9（上）/ 4 5 6（中）/ 1 2 3（下）。
+  int _subtitleAlignToAss(SubtitleAlignX alignX, SubtitleAlignY alignY) {
+    final row = switch (alignY) {
+      SubtitleAlignY.top => 7,
+      SubtitleAlignY.center => 4,
+      SubtitleAlignY.bottom => 1,
+    };
+    final col = switch (alignX) {
+      SubtitleAlignX.left => 0,
+      SubtitleAlignX.center => 1,
+      SubtitleAlignX.right => 2,
+    };
+    return row + col;
   }
 
   String _subtitleOverrideModeToMpv(SubtitleStyleOverrideMode mode) {
@@ -2539,37 +2533,71 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
                     } catch (_) {}
                   }
       player.setProperty('sub-delay', subtitleDelaySeconds.toStringAsFixed(2));
-      player.setProperty('sub-pos', _subtitlePosition.toStringAsFixed(0));
-      player.setProperty('sub-align-x', _subtitleAlignXToMpv(_subtitleAlignX));
-      player.setProperty('sub-align-y', _subtitleAlignYToMpv(_subtitleAlignY));
-      player.setProperty('sub-margin-x', _subtitleMarginX.round().toString());
-      player.setProperty('sub-margin-y', _subtitleMarginY.round().toString());
-      player.setProperty(
-        'sub-opacity',
-        _subtitleOpacityToMpv(_subtitleOpacity).toString(),
-      );
-      player.setProperty(
-        'sub-border-size',
-        _subtitleBorderSize.toStringAsFixed(1),
-      );
-      player.setProperty(
-        'sub-shadow-offset',
-        _subtitleShadowOffset.toStringAsFixed(1),
-      );
-      // 内嵌轨道颜色：字幕设置面板（subtitleColor 系）应用 sub-color——
-            // 面板颜色只渲染内嵌/内核轨；外挂 SRT 叠层用独立 externalSubtitleColor
-            // （长按外挂调色板），互不污染。
-            player.setProperty('sub-color', _colorToMpvHex(subtitleColor));
-            player.setProperty(
-              'sub-border-color',
-              _colorToMpvHex(subtitleBorderColor),
-            );
-            player.setProperty(
-              'sub-shadow-color',
-              _colorToMpvHex(subtitleShadowColor),
-            );
-      player.setProperty('sub-bold', _subtitleBold ? 'yes' : 'no');
-      player.setProperty('sub-italic', _subtitleItalic ? 'yes' : 'no');
+      // 垂直边距在裁剪版 libmpv 上没有 sub-margin-y 属性，折算成位置
+      // 百分比并入 sub-pos（10px ≈ 1%），与位置滑块同通道叠加。
+      final effectiveSubPos =
+          (_subtitlePosition - _subtitleMarginY * 0.1).clamp(0.0, 100.0);
+      player.setProperty('sub-pos', effectiveSubPos.toStringAsFixed(0));
+
+      // media-kit 裁剪版 libmpv（实测 v0.39.0）删掉了整个字幕样式选项组：
+      // sub-margin-x/y、sub-align-x/y、sub-color、sub-font、sub-opacity、
+      // sub-outline-size、sub-shadow-offset、sub-bold、sub-italic 全部不
+      // 存在，setProperty 静默失败——这就是边距/对齐/透明度/阴影滑块一直
+      // 无效的原因。可用通道是 sub-ass-force-style：按字段改写 ASS 样式，
+      // 只下发用户实际改过的字段，未触碰字段（如双语配色）保持作者样式。
+      // 字段生效前提是 sub-ass-override=yes（见下方升级规则）。
+      final styleParts = <String>[];
+      final marginXDeviates = _subtitleMarginX.abs() >= 0.5;
+      final alignDeviates = _subtitleAlignX != SubtitleAlignX.center ||
+          _subtitleAlignY != SubtitleAlignY.bottom;
+      final borderDeviates =
+          (_subtitleBorderSize - VideoPlayerState.defaultSubtitleBorderSize)
+                  .abs() >=
+              0.05;
+      final shadowDeviates =
+          (_subtitleShadowOffset - VideoPlayerState.defaultSubtitleShadowOffset)
+                  .abs() >=
+              0.05;
+      final colorDeviates = subtitleColor.toARGB32() !=
+              VideoPlayerState.defaultSubtitleColorValue ||
+          subtitleBorderColor.toARGB32() !=
+              VideoPlayerState.defaultSubtitleBorderColorValue ||
+          subtitleShadowColor.toARGB32() !=
+              VideoPlayerState.defaultSubtitleShadowColorValue;
+      final opacityDeviates = _subtitleOpacity < 0.999;
+      if (playerKernelName == 'Media Kit') {
+        if (marginXDeviates) {
+          final mx = _subtitleMarginX.round();
+          styleParts
+            ..add('MarginL=$mx')
+            ..add('MarginR=$mx');
+        }
+        if (alignDeviates) {
+          styleParts.add(
+              'Alignment=${_subtitleAlignToAss(_subtitleAlignX, _subtitleAlignY)}');
+        }
+        if (borderDeviates) {
+          styleParts.add('Outline=${_subtitleBorderSize.toStringAsFixed(1)}');
+        }
+        if (shadowDeviates) {
+          styleParts.add('Shadow=${_subtitleShadowOffset.toStringAsFixed(1)}');
+        }
+        if (_subtitleBold) styleParts.add('Bold=-1');
+        if (_subtitleItalic) styleParts.add('Italic=-1');
+        if (colorDeviates || opacityDeviates) {
+          styleParts
+            ..add('PrimaryColour=${_colorToAssStyleValue(subtitleColor, _subtitleOpacity)}')
+            ..add('OutlineColour=${_colorToAssStyleValue(subtitleBorderColor, _subtitleOpacity)}')
+            ..add('BackColour=${_colorToAssStyleValue(subtitleShadowColor, _subtitleOpacity)}');
+        }
+        player.setProperty('sub-ass-force-style', styleParts.join(','));
+      }
+      final positioningDeviates =
+          (_subtitlePosition - VideoPlayerState.defaultSubtitlePosition)
+                  .abs() >=
+              0.5 ||
+          _subtitleMarginY.abs() >= 0.5;
+      final styleDeviates = styleParts.isNotEmpty;
 
       String? effectiveFontDir;
       String? localFontsFolder;
@@ -2588,17 +2616,15 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
         }
         final resolvedDefaultFont = _defaultSubtitleFontNameForPlatform();
         player.setProperty('sub-font', resolvedDefaultFont);
-        // ASS 内嵌轨的定位由样式脚本主导，mpv 在 sub-ass-override=no 时
-        // 忽略 sub-pos（适配器加载时也硬编码 no），位置滑块拖不动 ASS
-        // 字幕。auto 模式下位置偏离底部默认即视为用户要干预定位：升到
-        // yes——sub-pos 可移动 ASS 轨，但不像 force 那样用 sub-color 等
-        // 整体改写样式（会毁掉双语配色）；滑回 100 后恢复作者样式。
+        // ASS 内嵌轨的样式由脚本主导，mpv 在 sub-ass-override=no 时忽略
+        // sub-pos 与 sub-ass-force-style（适配器加载时也硬编码 no）。auto
+        // 模式下任何样式设置偏离默认即视为用户要干预：升到 yes——force-
+        // style 字段生效，但不像 force 那样整体改写样式（会毁掉双语配色）；
+        // 全部回到默认后恢复作者样式。
         var effectiveOverride =
             _subtitleOverrideModeToMpv(_subtitleOverrideMode);
         if (effectiveOverride == 'no' &&
-            (_subtitlePosition - VideoPlayerState.defaultSubtitlePosition)
-                    .abs() >=
-                0.5) {
+            (positioningDeviates || styleDeviates)) {
           effectiveOverride = 'yes';
         }
         player.setProperty(
