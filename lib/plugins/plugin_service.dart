@@ -264,6 +264,9 @@ class PluginService extends ChangeNotifier {
   }
 
   Future<void> _initialize() async {
+    // 插件索引 + 资产 JS 扫描不在首帧渲染路径上：等首帧后再加载，
+    // _ready 的所有消费者（loadStartupScript / 遥控指令等）本来就会 await。
+    await WidgetsBinding.instance.endOfFrame;
     _pluginIndex = await _pluginStorage.loadPluginIndex();
     await _reloadPlugins();
     _isLoaded = true;

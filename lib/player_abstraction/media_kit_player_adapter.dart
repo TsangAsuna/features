@@ -368,6 +368,10 @@ class MediaKitPlayerAdapter
                 _disableMpvLogs ? MPVLogLevel.error : _resolveMpvLogLevel(),
           ),
         ) {
+    // main() only pre-initializes MediaKit when the Media Kit kernel is the
+    // saved default (startup memory: skip the eager Mpv.framework dlopen for
+    // everyone else). This idempotent call covers runtime kernel switches.
+    MediaKit.ensureInitialized();
     _applyMpvLogLevelOverride();
     _applyPlatformHdrOutputOptions();
     _applyMpvDiagnosticOptions();

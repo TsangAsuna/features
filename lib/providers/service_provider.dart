@@ -1,4 +1,6 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'dart:async';
 import 'package:nipaplay/services/server_history_sync_service.dart';
 import 'package:nipaplay/services/web_server_service.dart';
 import 'package:nipaplay/services/scan_service.dart';
@@ -24,25 +26,33 @@ class ServiceProvider {
       ServerHistorySyncService.instance;
 
   static Future<void> initialize() async {
-    // 可以在这里添加服务的初始化逻辑
-    // 并行初始化网络媒体库服务，不等待连接验证完成
-    await Future.wait([
+    // 网络媒体库 provider 的连接验证全部转为后台：启动路径只保留本地偏好
+    // 读取。首页对未加载完成的 provider 已有 loading 态。
+    unawaited(Future.wait([
       jellyfinProvider.initialize(),
       embyProvider.initialize(),
       dandanplayRemoteProvider.initialize(),
-    ]);
+    ]).then((_) {
+      // 服务器观看历史同步（当前仅支持 Jellyfin 下行同步）
+      serverHistorySyncService.initialize(
+        onHistoryUpdated: () => watchHistoryProvider.refresh(),
+      );
+    }));
 
-    // 本地观看历史需要同步等待加载完成
+    // 本地观看历史延后到首帧后加载（加载含逐条文件存在性 stat，历史多时
+    // 占用数百毫秒）；首屏 splash 到主页面期间 provider 自身有 loading 态。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(_loadAfterFirstFrame());
+    });
+  }
+
+  static Future<void> _loadAfterFirstFrame() async {
     await watchHistoryProvider.loadHistory();
     // 让 WatchHistoryProvider 能响应扫描完成（包括来自远程 API 的扫描请求）
     watchHistoryProvider.setScanService(scanService);
 
-    // 初始化服务器观看历史同步（当前仅支持 Jellyfin 下行同步）
-    serverHistorySyncService.initialize(
-      onHistoryUpdated: () => watchHistoryProvider.refresh(),
-    );
-
-    // 远程访问服务：若用户开启了“软件启动自动开启”，则在此启动服务
+    // 远程访问服务：若用户开启了“软件启动自动开启”，则在此启动服务。
+    // 绑定 HTTP 端口不需要发生在首帧之前。
     try {
       await webServer.loadSettings();
       if (!kIsWeb) {

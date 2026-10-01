@@ -338,19 +338,27 @@ void main(List<String> args) async {
   // Native runtime support is centralized so Android TV can continue using
   // the Android plugin graph while tvOS keeps its dedicated dependencies.
   if (globals.supportsMediaKitNativeRuntime) {
-    try {
-      MediaKit.ensureInitialized();
-    } catch (e) {
-      debugPrint('MediaKit初始化警告: $e');
-      // 如果是重复初始化错误，可以安全忽略
-      if (!e
-          .toString()
-          .contains('invalid reuse after initialization failure')) {
-        rethrow;
+    // Only dlopen the full Mpv.framework (libmpv + libass) when the user
+    // actually runs the Media Kit kernel. On iOS the default kernel is now
+    // Erika, and this eager load was the single largest avoidable startup
+    // allocation (~10-30 MB RSS + relocation time) for everyone. The adapter
+    // re-runs ensureInitialized() when a Media Kit player is created, so
+    // switching kernels at runtime still works.
+    if (PlayerFactory.getKernelType() == PlayerKernelType.mediaKit) {
+      try {
+        MediaKit.ensureInitialized();
+      } catch (e) {
+        debugPrint('MediaKit初始化警告: $e');
+        // 如果是重复初始化错误，可以安全忽略
+        if (!e
+            .toString()
+            .contains('invalid reuse after initialization failure')) {
+          rethrow;
+        }
       }
-    }
-    if (MediaKitPlayerAdapter.shouldUseDefaultQuietMpvLogs()) {
-      MediaKitPlayerAdapter.setMpvLogLevelNone();
+      if (MediaKitPlayerAdapter.shouldUseDefaultQuietMpvLogs()) {
+        MediaKitPlayerAdapter.setMpvLogLevelNone();
+      }
     }
   }
 
@@ -467,9 +475,7 @@ void main(List<String> args) async {
 
   // 并行执行初始化操作
   await Future.wait(<Future<dynamic>>[
-    // 初始化弹弹play服务
-    DandanplayService.initialize(),
-    // 初始化服务提供者
+    // 初始化服务提供者（其内部网络/IO 部分已自行延后到首帧后）
     ServiceProvider.initialize(),
 
     // 加载设置
@@ -520,13 +526,13 @@ void main(List<String> args) async {
 
     // 根据设置清理弹幕缓存
     _prepareDanmakuCachePolicy(),
-
-    // 初始化观看记录管理器
-    WatchHistoryManager.initialize(),
   ]).then((results) async {
-    // 以下网络型服务不阻塞首帧：等首帧渲染完成后再初始化（冷启动内存
+    // 以下服务不阻塞首帧：等首帧渲染完成后再初始化（冷启动内存
     // 与启动耗时同时受益；这些服务都不在首帧渲染路径上）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      // 弹弹play 服务含 token 续期网络请求（自带 onTimeout 兜底），非首帧路径
+      DandanplayService.initialize();
+      WatchHistoryManager.initialize();
       if (!kIsWeb) AutoSyncService.instance.initialize();
       if (!kIsWeb) SMBProxyService.instance.initialize();
       BangumiService.instance.initialize().then((_) {
@@ -542,7 +548,8 @@ void main(List<String> args) async {
     // 服务器连接状态检测（后台执行，不阻塞启动）
 
     // 处理主题模式设置
-    final settingsMap = results[2] as Map<String, dynamic>;
+    // 外层列表现在是 [ServiceProvider.initialize, 设置加载(Map), 弹幕缓存清理]
+    final settingsMap = results[1] as Map<String, dynamic>;
     final savedThemeMode = settingsMap['themeMode'] as String? ??
         (globals.isTelevision ? 'dark' : 'system');
     final savedDetailModeString =
@@ -794,8 +801,8 @@ class _NipaPlayAppState extends State<NipaPlayApp> with WidgetsBindingObserver {
 
         watchHistoryProvider.setScanService(scanService);
 
-        // 启动历史记录加载
-        watchHistoryProvider.loadHistory();
+        // 历史加载已由 ServiceProvider 首帧后统一执行（这里曾额外再加载
+        // 一次 —— 全表 SQLite 读取 + 逐条 stat，重复第三次）。
       } catch (e) {
         debugPrint('_NipaPlayAppState: 设置监听器时出错: $e');
       }

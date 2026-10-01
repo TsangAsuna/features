@@ -76,7 +76,9 @@ class SystemResourceMonitor {
       _instance._initMdkVersion();
       _instance._updatePlayerKernelType();
       _instance._updateDanmakuKernelType();
-      await _instance._initRustProbe();
+      // The rust probe is diagnostics-only; don't force the rust runtime up
+      // before first frame — it initializes on first real consumer instead.
+      unawaited(_instance._initRustProbe());
     } else if (kIsWeb) {
       _instance._playerKernelType = 'Video Player';
       _instance._danmakuKernelType = 'CPU';
