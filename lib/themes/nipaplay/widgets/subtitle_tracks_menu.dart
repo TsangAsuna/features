@@ -461,6 +461,8 @@ class _SubtitleTracksMenuState extends State<SubtitleTracksMenu> {
             // Note: `activeSubtitleTracks` in `MediaKitPlayerAdapter` expects an index
             // that corresponds to its `_mediaInfo.subtitle` list.
             videoState.player.activeSubtitleTracks = [trackIndex];
+            // 记录选中：取消外挂轨后回退内嵌时恢复这条轨道
+            videoState.noteEmbeddedSubtitleTrackSelected(trackIndex);
             debugPrint(
                 '_SubtitleTracksMenu: Switched to embedded subtitle, player instructed with mediaInfo index: $trackIndex');
 

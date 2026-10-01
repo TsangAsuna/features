@@ -751,6 +751,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         // 如果找到了优先的字幕轨道，就激活它
         if (preferredSubtitleIndex != null) {
           player.activeSubtitleTracks = [preferredSubtitleIndex];
+          // 记录为"最后选中的内嵌轨"：取消外挂轨后回退内嵌时用它，
+          // 否则 restore 落在 0 号轨道（可能不是字幕轨），内嵌回不来
+          // 且位置滑块对着空轨道不生效。
+          _subtitleManager.noteEmbeddedTrackSelected(preferredSubtitleIndex);
 
           // 更新字幕轨道信息
           if (player.mediaInfo.subtitle != null &&

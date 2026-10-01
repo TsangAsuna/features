@@ -302,6 +302,8 @@ class _CupertinoSubtitleTracksPaneState
           videoState.setExternalSubtitle("");
           if (trackIndex >= 0) {
             videoState.player.activeSubtitleTracks = [trackIndex];
+            // 记录选中：取消外挂轨后回退内嵌时恢复这条轨道
+            videoState.noteEmbeddedSubtitleTrackSelected(trackIndex);
           } else {
             videoState.player.activeSubtitleTracks = [];
           }

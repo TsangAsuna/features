@@ -91,10 +91,18 @@ class SubtitleManager extends ChangeNotifier {
   /// 所有活跃的外部字幕路径（支持多挂 SRT 叠层渲染）
   final List<String> _activeExternalSubtitlePaths = [];
 
-  /// 用户最后一次手动选中的内嵌字幕轨索引（媒体轨道列表里的下标）。
+  /// 用户最后一次选中的内嵌字幕轨索引（媒体轨道列表里的下标）。
   /// 移除外挂内核轨字幕（ASS/SSA 占 sid）后用它回退内嵌轨，
   /// 否则 sid=no 之后滑块/样式全部打到空轨道（BUG-A）。
   int _lastSelectedEmbeddedTrackIndex = 0;
+
+  /// 记录当前选中的内嵌字幕轨（自动优先选轨与手动点选各入口都要调用）。
+  /// 与轨道信息刷新（updateAllSubtitleTracksInfo）分离——刷新会遍历全部
+  /// 轨道，若在刷新里记录会把"最后选中"污染成最后一条轨道。
+  void noteEmbeddedTrackSelected(int trackIndex) {
+    if (trackIndex < 0) return;
+    _lastSelectedEmbeddedTrackIndex = trackIndex;
+  }
 
   /// 获取全部活跃的外部字幕路径（多挂时叠加渲染）
   List<String> getAllActiveExternalSubtitlePaths() =>
@@ -1952,7 +1960,6 @@ class SubtitleManager extends ChangeNotifier {
     }
 
     final playerSubInfo = _player.mediaInfo.subtitle![trackIndex];
-    _lastSelectedEmbeddedTrackIndex = trackIndex;
     debugPrint(
       'SubtitleManager: updateEmbeddedSubtitleTrack - Called for trackIndex: $trackIndex',
     );
@@ -2119,6 +2126,7 @@ class SubtitleManager extends ChangeNotifier {
       if (activeIndex >= 0 &&
           activeIndex < _player.mediaInfo.subtitle!.length) {
         // 激活的是内嵌字幕轨道
+        _lastSelectedEmbeddedTrackIndex = activeIndex;
         updateSubtitleTrackInfo('embedded_subtitle', {
           'index': activeIndex,
           'title': _player.mediaInfo.subtitle![activeIndex].toString(),

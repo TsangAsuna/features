@@ -965,6 +965,8 @@ class PlayerRemoteControlBridge {
           state.setExternalSubtitle('');
         } else {
           state.player.activeSubtitleTracks = [index];
+          // 记录选中：取消外挂轨后回退内嵌时恢复这条轨道
+          state.noteEmbeddedSubtitleTrackSelected(index);
         }
         return;
       case 'audio.activeTrackIndex':
