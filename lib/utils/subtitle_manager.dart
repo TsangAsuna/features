@@ -104,6 +104,10 @@ class SubtitleManager extends ChangeNotifier {
     _lastSelectedEmbeddedTrackIndex = trackIndex;
   }
 
+  /// 取消外挂后应恢复的内嵌轨（最后选中的内嵌轨下标，调用方按
+  /// mediaInfo 边界自行钳制）。
+  int get preferredEmbeddedTrackIndex => _lastSelectedEmbeddedTrackIndex;
+
   /// 获取全部活跃的外部字幕路径（多挂时叠加渲染）
   List<String> getAllActiveExternalSubtitlePaths() =>
       List.unmodifiable(_activeExternalSubtitlePaths);

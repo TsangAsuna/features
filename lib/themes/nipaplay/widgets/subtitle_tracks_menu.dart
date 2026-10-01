@@ -738,13 +738,25 @@ class _SubtitleTracksMenuState extends State<SubtitleTracksMenu> {
                     child: InkWell(
                       onTap: () async {
                         if (isActive) {
+                          // 取消外挂：恢复内嵌轨继续显示（内核轨从未被
+                          // 外挂抢占，不该一起关掉），没有内嵌轨才全关。
+                          final tracks = videoState.player.mediaInfo.subtitle;
+                          final targetIndex =
+                              (tracks != null && tracks.isNotEmpty)
+                                  ? videoState.preferredEmbeddedSubtitleTrackIndex
+                                      .clamp(0, tracks.length - 1)
+                                  : -1;
                           final switched = await _switchToEmbeddedSubtitle(
                             context,
-                            -1,
+                            targetIndex,
                             persistEmbyPreference: false,
                           );
                           if (switched && context.mounted) {
-                            BlurSnackBar.show(context, '已关闭字幕');
+                            BlurSnackBar.show(
+                                context,
+                                targetIndex >= 0
+                                    ? '已取消外挂，恢复内嵌字幕'
+                                    : '已关闭字幕');
                           }
                         } else {
                           final filePath = subtitle['path'] as String;
@@ -876,10 +888,11 @@ class _SubtitleTracksMenuState extends State<SubtitleTracksMenu> {
                   final track = entry.value;
 
                   // Determine if this track is active.
-                  // Active state is based on player's active tracks and no external subtitle being active.
-                  final bool hasActiveExternal =
-                      _externalSubtitles.any((s) => s['isActive'] == true);
-                  final isActive = !hasActiveExternal &&
+                  // 勾选反映内核实际渲染：外挂叠层与内嵌轨可同时显示
+                  // （叠层共存设计，内核轨不受外挂影响），内嵌勾选不再因
+                  // 外挂激活被强制熄灭；用户主动关闭内嵌（轨道为空）时
+                  // 才显示未勾选。
+                  final isActive =
                       videoState.player.activeSubtitleTracks.contains(index);
 
                   // --- Get Title and Language from SubtitleManager ---

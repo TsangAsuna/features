@@ -278,6 +278,10 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
     _subtitleManager.noteEmbeddedTrackSelected(trackIndex);
   }
 
+  // 桥接方法：取消外挂后应恢复的内嵌轨（最后选中的内嵌轨下标）
+  int get preferredEmbeddedSubtitleTrackIndex =>
+      _subtitleManager.preferredEmbeddedTrackIndex;
+
   // 桥接方法：获取缓存的字幕内容
   List<dynamic>? getCachedSubtitle(String path) {
     return _subtitleManager.getCachedSubtitle(path);
