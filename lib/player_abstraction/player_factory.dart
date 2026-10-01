@@ -233,8 +233,21 @@ class PlayerFactory {
     return _cachedKernelType ?? _defaultKernelType;
   }
 
-  static PlayerKernelType get _defaultKernelType =>
-      globals.isTvOS ? PlayerKernelType.erika : PlayerKernelType.mdk;
+  static PlayerKernelType get _defaultKernelType {
+    if (globals.isTvOS) {
+      return PlayerKernelType.erika;
+    }
+    // iOS defaults to the in-house kernel: it renders into a native
+    // CAMetalLayer (composited by iOS directly, bypassing Flutter's texture
+    // pipeline) and composites danmaku in-kernel, which removes the texture
+    // bridge chains and the Flutter danmaku overlay entirely. MDK remains
+    // the default elsewhere. Users can still switch kernels in settings;
+    // the hot-swap path handles it live.
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.iOS) {
+      return PlayerKernelType.erika;
+    }
+    return PlayerKernelType.mdk;
+  }
 
   static bool _isKernelSupportedOnCurrentPlatform(PlayerKernelType type) {
     if (kIsWeb) return type == PlayerKernelType.videoPlayer;
