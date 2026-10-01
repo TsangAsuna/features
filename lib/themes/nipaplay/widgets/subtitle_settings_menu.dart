@@ -374,6 +374,23 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
                   ]
                 : [
                     _buildScaleSection(controller),
+                    // 内核能力差异提示：Erika/MDK 只实现了字号设置接口，
+                    // 完整设置仅 Media Kit (libmpv) 支持。不提示的话
+                    // "只剩字号"会被当成设置丢失（iOS 默认内核切 Erika
+                    // 后实际发生过）。
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+                      child: Text(
+                        '当前内核（${videoState.player.getPlayerKernelName()}）'
+                        '仅支持调节字幕大小；位置、颜色、字体等完整设置请在'
+                        ' 设置 → 播放 → 播放器内核 中切换到 Libmpv。',
+                        locale: const Locale('zh', 'CN'),
+                        style: TextStyle(
+                          color: menuColors.foreground.withValues(alpha: 0.55),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
                   ],
           ),
         );
