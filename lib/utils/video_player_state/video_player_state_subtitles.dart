@@ -159,14 +159,14 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   void setExternalSubtitle(String path, {bool isManualSetting = false}) {
     _subtitleManager.setExternalSubtitle(path,
         isManualSetting: isManualSetting);
-    _reapplyKernelSubtitleStyleForOverlay(path);
+    _reapplyKernelSubtitleStyleAfterSelectionChange();
     _notifyListeners();
   }
 
   // 强制设置外部字幕（手动操作）
   void forceSetExternalSubtitle(String path) {
     _subtitleManager.forceSetExternalSubtitle(path);
-    _reapplyKernelSubtitleStyleForOverlay(path);
+    _reapplyKernelSubtitleStyleAfterSelectionChange();
     _notifyListeners();
   }
 
@@ -180,18 +180,18 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
       {String? displayName}) async {
     await _subtitleManager.addExternalSubtitleToStack(path,
         displayName: displayName);
-    _reapplyKernelSubtitleStyleForOverlay(path);
+    _reapplyKernelSubtitleStyleAfterSelectionChange();
     _notifyListeners();
   }
 
-  /// 激活/叠加一条 App 叠层渲染的外挂字幕（SRT/VTT）后，把当前样式偏好
-  /// （含位置滑块对应的 sub-pos）重新下发内核：叠层不占内核轨，内嵌轨
-  /// 仍在内核渲染，但自动加载发生在轨道激活之后，若不回放，内嵌轨会停
-  /// 在内核默认位置而滑块仍显示记忆值（用户感知：滑块 100 但字幕不在
-  /// 视频底部）。内核侧无内嵌/内核外挂轨时 applySubtitleStylePreference
-  /// 内部守卫会直接返回，不会误设属性。
-  void _reapplyKernelSubtitleStyleForOverlay(String path) {
-    if (path.isEmpty || !externalSubtitleRenderedInApp(path)) return;
+  /// 字幕选择状态变化（激活/叠加/清除外挂，含外挂移除后内嵌轨重新成为
+  /// 唯一显示字幕）后，把当前样式偏好（含位置滑块对应的 sub-pos）重新
+  /// 下发内核：外挂叠层不占内核轨，内嵌轨一直在内核渲染，但选择变化
+  /// 不会自动带上内核侧的样式——若不回放，内核停在上一次的 sub-pos
+  /// （用户感知：滑块显示 100，内嵌字幕却悬在 80-90 半空；或取消外挂后
+  /// 内嵌不回底部）。内核属性写入在无字幕时是无害空操作；未 materialize
+  /// 或非 Media Kit/MDK 内核时 applySubtitleStylePreference 内部直接返回。
+  void _reapplyKernelSubtitleStyleAfterSelectionChange() {
     if (kIsWeb || _isDisposed) return;
     unawaited(applySubtitleStylePreference());
   }
@@ -199,6 +199,7 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   // 桥接方法：取消挂载外部字幕（从叠层/内核移除）
   Future<void> removeExternalSubtitle(String path) async {
     await _subtitleManager.removeExternalSubtitleFromStack(path);
+    _reapplyKernelSubtitleStyleAfterSelectionChange();
     _notifyListeners();
   }
 
@@ -270,6 +271,11 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   // 桥接方法：当字幕轨道改变时调用
   void onSubtitleTrackChanged() {
     _subtitleManager.onSubtitleTrackChanged();
+  }
+
+  // 桥接方法：记录当前选中的内嵌字幕轨（供移除外挂轨后回退内嵌）
+  void noteEmbeddedSubtitleTrackSelected(int trackIndex) {
+    _subtitleManager.noteEmbeddedTrackSelected(trackIndex);
   }
 
   // 桥接方法：获取缓存的字幕内容
