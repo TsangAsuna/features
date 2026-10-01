@@ -2588,9 +2588,22 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
         }
         final resolvedDefaultFont = _defaultSubtitleFontNameForPlatform();
         player.setProperty('sub-font', resolvedDefaultFont);
+        // ASS 内嵌轨的定位由样式脚本主导，mpv 在 sub-ass-override=no 时
+        // 忽略 sub-pos（适配器加载时也硬编码 no），位置滑块拖不动 ASS
+        // 字幕。auto 模式下位置偏离底部默认即视为用户要干预定位：升到
+        // yes——sub-pos 可移动 ASS 轨，但不像 force 那样用 sub-color 等
+        // 整体改写样式（会毁掉双语配色）；滑回 100 后恢复作者样式。
+        var effectiveOverride =
+            _subtitleOverrideModeToMpv(_subtitleOverrideMode);
+        if (effectiveOverride == 'no' &&
+            (_subtitlePosition - VideoPlayerState.defaultSubtitlePosition)
+                    .abs() >=
+                0.5) {
+          effectiveOverride = 'yes';
+        }
         player.setProperty(
           'sub-ass-override',
-          _subtitleOverrideModeToMpv(_subtitleOverrideMode),
+          effectiveOverride,
         );
         return;
       }
