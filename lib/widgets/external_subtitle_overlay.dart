@@ -158,45 +158,45 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
       path: path,
     );
 
-    if (subtitleText.trim().isEmpty || videoState.subtitleOpacity <= 0) {
+    // 全局字幕设置（透明度/描边/阴影/对齐等）仅作用于内嵌轨（内核渲染），
+    // 外挂叠层不读这些值——用固定基线样式，摆位只听本条字幕的
+    // pathSubtitlePosition/marginX（长按拖动）。
+    if (subtitleText.trim().isEmpty) {
       // 编辑态（已出框）即使处于两条字幕的空隙也要显示占位框，
-      // 否则框突然消失、用户失去拖动锚点；不透明度为 0 时仍隐藏。
-      if (_editingPath == path && videoState.subtitleOpacity > 0) {
-        return Opacity(
-          opacity: videoState.subtitleOpacity.clamp(0.0, 1.0).toDouble(),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Align(
-              alignment: Alignment(
-                _resolveHorizontalAlignment(videoState.subtitleAlignX),
-                _resolveVerticalAlignment(
-                    videoState.pathSubtitlePosition(path)),
-              ),
-              child: Transform.translate(
-                offset: Offset(videoState.pathSubtitleMarginX(path), 0),
-                // 与编辑态相同的双层结构：占位文本 + 边框层
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    const SizedBox(
-                      width: 120,
-                      height: 28,
-                      child: Opacity(opacity: 0, child: Text(' ')),
-                    ),
-                    Positioned.fill(
-                      child: IgnorePointer(
-                        child: Container(
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: const Color(0x99FFFFFF),
-                              width: 1,
-                            ),
+      // 否则框突然消失、用户失去拖动锚点。
+      if (_editingPath == path) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          child: Align(
+            alignment: Alignment(
+              0, // 水平固定居中：全局水平对齐只作用于内嵌轨
+              _resolveVerticalAlignment(
+                  videoState.pathSubtitlePosition(path)),
+            ),
+            child: Transform.translate(
+              offset: Offset(videoState.pathSubtitleMarginX(path), 0),
+              // 与编辑态相同的双层结构：占位文本 + 边框层
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  const SizedBox(
+                    width: 120,
+                    height: 28,
+                    child: Opacity(opacity: 0, child: Text(' ')),
+                  ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: const Color(0x99FFFFFF),
+                            width: 1,
                           ),
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -234,16 +234,16 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
                     text: subtitleText,
                     fillStyle: fillStyle,
                     borderStyle: borderStyle,
-                    showBorder: videoState.subtitleBorderSize > 0,
-                    textAlign: _resolveTextAlign(videoState.subtitleAlignX),
+                    showBorder: true,
+                    textAlign: TextAlign.center,
                   ),
                 )
               : _OutlinedSubtitleText(
                   text: subtitleText,
                   fillStyle: fillStyle,
                   borderStyle: borderStyle,
-                  showBorder: videoState.subtitleBorderSize > 0,
-                  textAlign: _resolveTextAlign(videoState.subtitleAlignX),
+                  showBorder: true,
+                  textAlign: TextAlign.center,
                 ),
         );
 
@@ -506,23 +506,20 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
           positionedContent = boxLayer;
         }
 
-        return Opacity(
-          opacity: videoState.subtitleOpacity.clamp(0.0, 1.0).toDouble(),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-            child: Align(
-              alignment: Alignment(
-                _resolveHorizontalAlignment(videoState.subtitleAlignX),
-                _resolveVerticalAlignment(
-                    videoState.pathSubtitlePosition(path)),
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          child: Align(
+            alignment: Alignment(
+              0, // 水平固定居中：全局水平对齐只作用于内嵌轨
+              _resolveVerticalAlignment(
+                  videoState.pathSubtitlePosition(path)),
+            ),
+            child: Transform.translate(
+              offset: Offset(
+                videoState.pathSubtitleMarginX(path),
+                0, // 外挂垂直位移独立（pathSubtitlePosition 控制），不跟随全局垂直边距滑块
               ),
-              child: Transform.translate(
-                offset: Offset(
-                  videoState.pathSubtitleMarginX(path),
-                  0, // 外挂垂直位移独立（pathSubtitlePosition 控制），不跟随全局垂直边距滑块
-                ),
-                child: positionedContent,
-              ),
+              child: positionedContent,
             ),
           ),
         );
@@ -826,30 +823,6 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
 
   // 右下角拉伸手柄：Listener 原生事件，不与长按抢；放在拖动 GestureDetector 外，确保可命中
 
-  // 右下角拉伸手柄：Listener 原生事件，不与长按抢；放在拖动 GestureDetector 外，确保可命中
-
-  double _resolveHorizontalAlignment(SubtitleAlignX alignX) {
-    switch (alignX) {
-      case SubtitleAlignX.left:
-        return -1;
-      case SubtitleAlignX.center:
-        return 0;
-      case SubtitleAlignX.right:
-        return 1;
-    }
-  }
-
-  TextAlign _resolveTextAlign(SubtitleAlignX alignX) {
-    switch (alignX) {
-      case SubtitleAlignX.left:
-        return TextAlign.left;
-      case SubtitleAlignX.center:
-        return TextAlign.center;
-      case SubtitleAlignX.right:
-        return TextAlign.right;
-    }
-  }
-
   double _resolveVerticalAlignment(double subtitlePosition) {
     final normalized = subtitlePosition.clamp(
       VideoPlayerState.minSubtitlePosition,
@@ -862,6 +835,8 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
 
   /// 叠层字幕的填充样式：SRT/VTT 为纯文本渲染，用户选择的字体直接生效
   /// （不需要"样式覆盖=强制"门控；ASS 特效走内核 libass，不经过此叠层）。
+  /// 全局设置（粗体/斜体/阴影/描边/对齐/透明度）仅作用于内嵌轨，
+  /// 叠层用固定基线，避免全局调整连带改动外挂。
   TextStyle _buildFillStyle(VideoPlayerState videoState, double fontSize) {
     final fontNames = videoState.externalSubtitleFontName
         .split(',')
@@ -872,33 +847,27 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
 
     return TextStyle(
       fontSize: fontSize,
-      fontWeight: videoState.subtitleBold ? FontWeight.bold : FontWeight.w500,
-      fontStyle:
-          videoState.subtitleItalic ? FontStyle.italic : FontStyle.normal,
+      fontWeight: FontWeight.w500,
+      fontStyle: FontStyle.normal,
       color: videoState.externalSubtitleColor,
       height: 1.28,
       fontFamily: fontsApply && fontNames.isNotEmpty ? fontNames.first : null,
       fontFamilyFallback:
           fontsApply && fontNames.length > 1 ? fontNames.sublist(1) : null,
-      shadows: videoState.subtitleShadowOffset > 0
-          ? [
-              Shadow(
-                color: videoState.externalSubtitleColor,
-                offset: Offset(0, videoState.subtitleShadowOffset),
-                blurRadius: videoState.subtitleShadowOffset * 2,
-              ),
-            ]
-          : null,
+      shadows: null,
     );
   }
 
-  /// 叠层字幕的描边样式（填充样式的前景描边变体）
+  /// 叠层字幕的描边样式（填充样式的前景描边变体），
+  /// 描边宽度固定基线，不跟随全局描边滑块。
   TextStyle _buildBorderStyle(
       VideoPlayerState videoState, TextStyle fillStyle) {
     final borderPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeJoin = StrokeJoin.round
-      ..strokeWidth = videoState.subtitleBorderSize.clamp(0.0, 8.0).toDouble()
+      ..strokeWidth = VideoPlayerState.defaultSubtitleBorderSize
+          .clamp(0.0, 8.0)
+          .toDouble()
       // 外挂叠层描边固定黑色（独立于播放器设置/内嵌描边）
       ..color = const Color(0xFF000000);
 
