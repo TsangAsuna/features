@@ -653,7 +653,7 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
           step: 1.0,
           displayTextBuilder: (v) => '${v.toStringAsFixed(0)}px',
           onChanged: videoState.setSubtitleMarginX,
-          hint: '字幕与左右边缘距离',
+          hint: '左边缘距离（居中对齐时字幕右移）',
         ),
         _buildSliderSection(
           label: '垂直边距',

@@ -74,6 +74,30 @@ class SubtitleManager extends ChangeNotifier {
   // 设置当前视频路径
   void setCurrentVideoPath(String? path) {
     _currentVideoPath = path;
+    // 副字幕轨随视频/内核实例重置：新 adapter 的 secondary-sid 默认 no，
+    // 状态必须同步清掉，否则菜单残留已失效的勾选。
+    _secondarySubtitleTrackId = null;
+  }
+
+  /// 副字幕轨（mpv secondary-sid）：双语 MKV 双轨同显方案。副轨由内核
+  /// 独立渲染在画面顶部、与主轨互不干扰——避开单轨内多行事件随
+  /// sub-pos 插值收拢重叠的问题（libass line_position 语义）。null=未启用。
+  String? _secondarySubtitleTrackId;
+
+  String? get secondarySubtitleTrackId => _secondarySubtitleTrackId;
+
+  /// [mpvTrackId] 传 null/空 = 关闭副轨（secondary-sid=no）。
+  void setSecondarySubtitleTrack(String? mpvTrackId) {
+    final resolved =
+        (mpvTrackId == null || mpvTrackId.isEmpty) ? null : mpvTrackId;
+    if (_secondarySubtitleTrackId == resolved) return;
+    _secondarySubtitleTrackId = resolved;
+    try {
+      _player.setProperty('secondary-sid', resolved ?? 'no');
+    } catch (e) {
+      debugPrint('SubtitleManager: 设置副字幕轨失败: $e');
+    }
+    notifyListeners();
   }
 
   // 更新字幕轨道信息

@@ -282,6 +282,19 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   int get preferredEmbeddedSubtitleTrackIndex =>
       _subtitleManager.preferredEmbeddedTrackIndex;
 
+  // ---- 副字幕轨（mpv secondary-sid，双语双轨同显）----
+
+  /// 当前副字幕轨的 mpv 轨道 id（null = 未启用）
+  String? get secondarySubtitleTrackId =>
+      _subtitleManager.secondarySubtitleTrackId;
+
+  /// 设置/关闭副字幕轨。副轨由内核渲染在画面顶部，与主轨独立定位，
+  /// 双语 MKV 用它同显"翻译+原文"而不会随位置滑块收拢重叠。
+  void setSecondarySubtitleTrack(String? mpvTrackId) {
+    _subtitleManager.setSecondarySubtitleTrack(mpvTrackId);
+    _notifyListeners();
+  }
+
   // 桥接方法：获取缓存的字幕内容
   List<dynamic>? getCachedSubtitle(String path) {
     return _subtitleManager.getCachedSubtitle(path);

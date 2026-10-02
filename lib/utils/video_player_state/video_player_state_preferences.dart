@@ -2568,9 +2568,12 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       if (playerKernelName == 'Media Kit') {
         if (marginXDeviates) {
           final mx = _subtitleMarginX.round();
-          styleParts
-            ..add('MarginL=$mx')
-            ..add('MarginR=$mx');
+          // 只发单侧 margin：居中对齐下对称的 MarginL/R 只会缩窄换行
+          // 宽度、不产生位移（ASS 数学特性，居中文本始终在剩余区域居中）。
+          // 左边缘距离 → MarginL（居中时字幕右移 v/2）；右对齐 → MarginR。
+          styleParts.add(_subtitleAlignX == SubtitleAlignX.right
+              ? 'MarginR=$mx'
+              : 'MarginL=$mx');
         }
         if (alignDeviates) {
           styleParts.add(
