@@ -6,6 +6,9 @@ import 'package:nipaplay/utils/globals.dart' as globals;
 abstract class DanmakuTextRenderer {
   const DanmakuTextRenderer();
 
+  /// 释放渲染器持有的资源（GPU 路径的字体图集等）。默认无资源。
+  void dispose() {}
+
   /// 构建并渲染弹幕文本
   ///
   /// [context] - 构建上下文

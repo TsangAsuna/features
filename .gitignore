@@ -69,3 +69,7 @@ docs/error.txt
 android/.kotlin/errors
 *.log
 /.codex_work
+
+# 交付前性能评估（tools/perf）产物
+tools/perf/fixtures/
+tools/perf/out/

@@ -159,6 +159,20 @@ class DecoderManager {
       debugPrint('使用平台默认解码器设置: $decoders');
     }
 
+    // tools/perf 评估钩子（仅非 release）：用环境变量固定本次运行的解码器
+    // 顺序做 A/B（如 NIPAPLAY_EVAL_DECODERS="D3D11,FFmpeg"），定位静默回退。
+    if (!kReleaseMode) {
+      final evalDecoders = Platform.environment['NIPAPLAY_EVAL_DECODERS'];
+      if (evalDecoders != null && evalDecoders.trim().isNotEmpty) {
+        decoders = evalDecoders
+            .split(',')
+            .map((e) => e.trim())
+            .where((e) => e.isNotEmpty)
+            .toList();
+        debugPrint('[DecoderManager] 评估覆写解码器顺序: $decoders');
+      }
+    }
+
     final adjustedDecoders = _applyHardwarePreference(
       decoders,
       useHardwareDecoder,

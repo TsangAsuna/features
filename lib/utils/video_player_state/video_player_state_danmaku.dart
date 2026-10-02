@@ -671,6 +671,23 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
     _totalDanmakuCount = mergedList.length;
     _maybeStartSpoilerDanmakuAnalysis(mergedList);
 
+    // 弹幕隐藏时不保留显示层：过滤+展示映射（_prepareDanmakuForDisplay）
+    // 会为每条弹幕再建一份 map，热番/剧场版一集可达数十 MB，而 UI 根本
+    // 不渲染。轨道源数据（_danmakuTracks）保留，重新打开时重建即可。
+    if (!_danmakuVisible) {
+      _danmakuList = <Map<String, dynamic>>[];
+      _danmakuListVersion++;
+      _danmakuDisplayDataReleased = true;
+      if (_erikaNativeDanmaku) {
+        unawaited(player.clearNativeDanmaku());
+      } else {
+        danmakuController?.clearDanmaku();
+      }
+      debugPrint('[updateMerged] 弹幕隐藏中，释放显示层数据（${mergedList.length} 条源数据保留在轨道）');
+      _notifyListeners();
+      return;
+    }
+
     int blockedTop = 0, blockedBottom = 0, blockedScroll = 0;
     final filteredList = mergedList
         .where((d) {
@@ -706,6 +723,7 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
 
     _danmakuList = filteredList;
     _danmakuListVersion++;
+    _danmakuDisplayDataReleased = false;
 
     if (locallySentDanmaku != null) {
       _locallySentDanmaku = Map<String, dynamic>.unmodifiable(

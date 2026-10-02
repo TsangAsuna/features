@@ -42,6 +42,28 @@ class SubtitleManager extends ChangeNotifier {
   /// 避免每帧二分/扫描。entries 与 _subtitleCache 同引用时才可信。
   final Map<String, _SubtitleLookupResult> _subtitleLookupCache = {};
 
+  /// 解析结果缓存上限：一份剧场版字幕解析后约 0.5-2MB，不设上限的话
+  /// 本次会话挂载过的每一份字幕都驻留到进程退出。超出上限按插入序淘汰
+  /// 最旧的非激活条目（磁盘上的原文件仍在，需要时重新解析）。
+  static const int _subtitleCacheMaxEntries = 8;
+
+  /// 释放指定路径的解析缓存。仍在挂载栈里的路径不释放（正在渲染）。
+  void _evictSubtitleCache(String path) {
+    if (_activeExternalSubtitlePaths.contains(path)) return;
+    _subtitleCache.remove(path);
+    _subtitleCacheFingerprint.remove(path);
+    _subtitleLookupCache.remove(path);
+  }
+
+  /// 缓存超限时按插入序（最旧优先）淘汰非激活条目。
+  void _enforceSubtitleCacheBudget() {
+    if (_subtitleCache.length <= _subtitleCacheMaxEntries) return;
+    for (final path in List<String>.from(_subtitleCache.keys)) {
+      if (_subtitleCache.length <= _subtitleCacheMaxEntries) break;
+      _evictSubtitleCache(path);
+    }
+  }
+
   /// 缓存指纹：path -> "size:mtime"，用于检测字幕文件内容变化
   final Map<String, String> _subtitleCacheFingerprint = {};
   int _subtitleLoadToken = 0;
@@ -415,6 +437,7 @@ class SubtitleManager extends ChangeNotifier {
           );
           _subtitleCache[path] = result.entries;
           _subtitleCacheFingerprint[path] = fingerprint;
+          _enforceSubtitleCacheBudget();
           notifyListeners();
         } else if (extension == '.sup') {
           debugPrint('SubtitleManager: 检测到sup字幕，跳过文本解析');
@@ -441,6 +464,7 @@ class SubtitleManager extends ChangeNotifier {
           );
           _subtitleCache[path] = result.entries;
           _subtitleCacheFingerprint[path] = fingerprint;
+          _enforceSubtitleCacheBudget();
           notifyListeners();
         }
       }
@@ -619,6 +643,10 @@ class SubtitleManager extends ChangeNotifier {
     // ExternalSubtitleOverlay 仍按旧路径渲染（"外挂轨道还在"）。
     _activeExternalSubtitlePaths.clear();
     _pathDisplayState.clear();
+    // 全部外挂已卸载：解析缓存一并释放（切集/重置时旧字幕不再需要）。
+    for (final cachedPath in List<String>.from(_subtitleCache.keys)) {
+      _evictSubtitleCache(cachedPath);
+    }
 
     final existing = _subtitleTrackInfo['external_subtitle'];
     if (existing is Map<String, dynamic>) {
@@ -755,6 +783,9 @@ class SubtitleManager extends ChangeNotifier {
     if (path.isEmpty) return;
     _activeExternalSubtitlePaths.remove(path);
     _pathDisplayState.remove(path);
+    // 移除即释放解析缓存：剧场版字幕解析结果 0.5-2MB，取消挂载后
+    // 没有理由驻留；重新挂载时 preloadSubtitleFile 会重新解析。
+    _evictSubtitleCache(path);
     if (_currentExternalSubtitlePath == path) {
       _currentExternalSubtitlePath = '';
     }

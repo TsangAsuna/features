@@ -27,6 +27,7 @@ import 'package:universal_html/html.dart' as web_html;
 // Added import for subtitle parser
 import 'dart:io';
 import 'package:nipaplay/dev/perf_stats_logger.dart';
+import 'package:nipaplay/dev/eval_scenarios.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -523,6 +524,9 @@ int _exactEndStreak = 0;
       AutoNextEpisodeService.defaultCountdownSeconds;
   List<Map<String, dynamic>> _danmakuList = [];
   int _danmakuListVersion = 0;
+  // 关弹幕时显示层数据（过滤+展示映射后的整份拷贝）被主动释放；
+  // 重新打开时由 _updateMergedDanmakuList 从轨道源数据重建。
+  bool _danmakuDisplayDataReleased = false;
   int _locallySentDanmakuRevision = 0;
   int _locallySentDanmakuListVersion = -1;
   Map<String, dynamic>? _locallySentDanmaku;
@@ -971,6 +975,10 @@ int _exactEndStreak = 0;
     if (DevPerfStatsLogger.enabled) {
       // 开发期交付前性能评估遥测（tools/perf/README.md），非用户功能。
       DevPerfStatsLogger.instance.start(_perfStatsSnapshot);
+    }
+    if (EvalScenarios.enabled) {
+      // 同上：评估场景自动化（合成弹幕/自动挂字幕/弹幕开关），非用户功能。
+      EvalScenarios.start(this);
     }
     _initialize();
   }
@@ -1848,6 +1856,7 @@ int _exactEndStreak = 0;
   void dispose() {
     _isDisposed = true;
     unawaited(DevPerfStatsLogger.instance.stop());
+    EvalScenarios.stop();
     _cancelDfmStartupGate();
 
     if (_currentVideoPath != null) {

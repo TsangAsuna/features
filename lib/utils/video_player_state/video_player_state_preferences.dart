@@ -367,6 +367,23 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       // so hiding cannot arrive together with a layout change and reset motion.
       if (_erikaNativeDanmaku) {
         unawaited(player.setNativeDanmakuEnabled(visible));
+        if (!visible) {
+          // 关闭时同步释放内核侧弹幕缓冲（完整 JSON + 解析结构），
+          // 重开由重建路径经 loadNativeDanmaku 重新灌入。
+          unawaited(player.clearNativeDanmaku());
+        }
+      }
+      if (!visible && !_erikaNativeDanmaku) {
+        // 非原生内核：立即释放显示层与渲染器已加载数据（overlay 随
+        // Stack 条件卸载，DFM+/GPU 布局缓冲已归还；这里清掉 VPS 侧
+        // 拷贝与 controller 引用）。轨道源数据保留，重开走重建。
+        _danmakuList = <Map<String, dynamic>>[];
+        _danmakuListVersion++;
+        _danmakuDisplayDataReleased = true;
+        danmakuController?.clearDanmaku();
+      } else if (visible && _danmakuDisplayDataReleased) {
+        // 重新打开：从轨道源数据重建显示层（无需网络/磁盘重读）。
+        _updateMergedDanmakuList();
       }
       _notifyListeners();
       final prefs = await SharedPreferences.getInstance();

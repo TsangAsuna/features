@@ -21,6 +21,12 @@ class GpuDanmakuTextRenderer extends DanmakuTextRenderer {
   }) : _fontAtlas = fontAtlas;
 
   @override
+  void dispose() {
+    // 工厂创建的图集未注册进 FontAtlasManager，归本渲染器独占。
+    _fontAtlas.dispose();
+  }
+
+  @override
   Widget build(
     BuildContext context,
     DanmakuContentItem content,

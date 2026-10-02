@@ -148,10 +148,23 @@ class _DanmakuContainerState extends State<DanmakuContainer> {
   }
 
   Future<void> _initializeTextRenderer() async {
-    _textRenderer = await DanmakuTextRendererFactory.create();
-    if (mounted) {
-      setState(() {});
+    final renderer = await DanmakuTextRendererFactory.create();
+    if (!mounted) {
+      // create 完成晚于 dispose：直接归还图集，避免泄漏。
+      renderer.dispose();
+      return;
     }
+    _textRenderer = renderer;
+    setState(() {});
+  }
+
+  @override
+  void dispose() {
+    // GPU 路径的渲染器独占一张 2048px 字体图集（ui.Image），不释放会随
+    // 每次弹幕 overlay 重建累积。
+    _textRenderer?.dispose();
+    _textRenderer = null;
+    super.dispose();
   }
 
   // 对弹幕列表进行预处理和排序

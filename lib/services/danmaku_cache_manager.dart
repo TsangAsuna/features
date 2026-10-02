@@ -11,21 +11,9 @@ class DanmakuCacheManager {
   static const int _oldAnimeThreshold = 18343;
   static const Duration _oldAnimeCacheDuration = Duration(days: 7);
   static const Duration _newAnimeCacheDuration = Duration(hours: 2);
-  static final Map<String, Map<String, dynamic>> _memoryCache = {};
-
-  /// 内存缓存 LRU 上限：一份解析后的弹幕 JSON（2k-10k 条）约 1.5-6MB，
-  /// 不封顶的话看过的每一集都会驻留到进程退出。命中时重新插入以维持
-  /// 访问序，超限从最旧开始淘汰（磁盘缓存仍在，回看时重新读盘）。
-  static const int _memoryCacheMaxEntries = 5;
-
-  static void _rememberInMemoryCache(
-      String episodeId, Map<String, dynamic> jsonData) {
-    _memoryCache.remove(episodeId);
-    _rememberInMemoryCache(episodeId, jsonData);
-    while (_memoryCache.length > _memoryCacheMaxEntries) {
-      _memoryCache.remove(_memoryCache.keys.first);
-    }
-  }
+  // 刻意不做内存层：一份解析后的弹幕 JSON（2k-10k 条）约 1.5-6MB，驻留
+  // 常驻只是让重开快几十毫秒；磁盘缓存仍是唯一层，读回成本可忽略。
+  // （旧版内存 LRU 因 _rememberInMemoryCache 自递归从未生效，已随本注释移除。）
   static io.Directory? _cachedDanmakuDir;
   static bool _migrationAttempted = false;
 
@@ -91,25 +79,6 @@ class DanmakuCacheManager {
   static Future<bool> isCacheValid(String episodeId) async {
     try {
       //////debugPrint('检查缓存有效性: $episodeId');
-      // 首先检查内存缓存
-      if (_memoryCache.containsKey(episodeId)) {
-        //////debugPrint('找到内存缓存');
-        final cacheData = _memoryCache.remove(episodeId)!;
-        _memoryCache[episodeId] = cacheData; // LRU: 刷新访问序
-        final timestamp = cacheData['timestamp'] as int;
-        final animeId = cacheData['animeId'] as int;
-        final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
-        final now = DateTime.now();
-
-        final cacheDuration = animeId < _oldAnimeThreshold
-            ? _oldAnimeCacheDuration
-            : _newAnimeCacheDuration;
-
-        final isValid = now.difference(cacheTime) < cacheDuration;
-        //////debugPrint('内存缓存${isValid ? '有效' : '已过期'}');
-        return isValid;
-      }
-
       final file = io.File(await _getCacheFilePath(episodeId));
       if (!await file.exists()) {
         //////debugPrint('缓存文件不存在');
@@ -128,12 +97,6 @@ class DanmakuCacheManager {
           : _newAnimeCacheDuration;
 
       final isValid = now.difference(cacheTime) < cacheDuration;
-      if (isValid) {
-        //////debugPrint('文件缓存有效，保存到内存缓存');
-        _rememberInMemoryCache(episodeId, jsonData);
-      } else {
-        //////debugPrint('文件缓存已过期');
-      }
       return isValid;
     } catch (e) {
       //////debugPrint('检查缓存有效性时出错: $e');
@@ -155,9 +118,6 @@ class DanmakuCacheManager {
         'count': uniqueComments.length
       };
 
-      // 保存到内存缓存
-      _rememberInMemoryCache(episodeId, jsonData);
-
       // 异步保存到文件
       final file = io.File(await _getCacheFilePath(episodeId));
       await file.writeAsString(json.encode(jsonData));
@@ -170,32 +130,6 @@ class DanmakuCacheManager {
     if (kIsWeb) return null;
     try {
       //////debugPrint('尝试从缓存获取弹幕: $episodeId');
-      // 首先检查内存缓存
-      if (_memoryCache.containsKey(episodeId)) {
-        //////debugPrint('从内存缓存获取弹幕');
-        final cacheData = _memoryCache.remove(episodeId)!;
-        _memoryCache[episodeId] = cacheData; // LRU: 刷新访问序
-        final timestamp = cacheData['timestamp'] as int;
-        final animeId = cacheData['animeId'] as int;
-        final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
-        final now = DateTime.now();
-
-        final cacheDuration = animeId < _oldAnimeThreshold
-            ? _oldAnimeCacheDuration
-            : _newAnimeCacheDuration;
-
-        if (now.difference(cacheTime) < cacheDuration) {
-          final comments = cacheData['comments'] as List<dynamic>;
-          // 对内存缓存中的数据也进行去重
-          final uniqueComments = _removeDuplicateDanmaku(comments);
-          //////debugPrint('内存缓存有效，返回 ${uniqueComments.length} 条弹幕');
-          return uniqueComments;
-        } else {
-          //////debugPrint('内存缓存已过期，移除');
-          _memoryCache.remove(episodeId);
-        }
-      }
-
       if (!await isCacheValid(episodeId)) {
         //////debugPrint('缓存无效');
         return null;
@@ -207,15 +141,6 @@ class DanmakuCacheManager {
       final comments = jsonData['comments'] as List<dynamic>;
       // 去除重复弹幕
       final uniqueComments = _removeDuplicateDanmaku(comments);
-
-      // 更新内存缓存，确保后续读取一致
-      final updatedCacheData = {
-        'timestamp': jsonData['timestamp'],
-        'animeId': jsonData['animeId'],
-        'comments': uniqueComments,
-        'count': uniqueComments.length
-      };
-      _rememberInMemoryCache(episodeId, updatedCacheData);
 
       //////debugPrint('返回 ${uniqueComments.length} 条弹幕');
       return uniqueComments;
@@ -246,21 +171,8 @@ class DanmakuCacheManager {
   static Future<void> clearExpiredCache() async {
     if (kIsWeb) return;
     try {
-      // 清理内存缓存
-      final now = DateTime.now();
-      _memoryCache.removeWhere((episodeId, cacheData) {
-        final timestamp = cacheData['timestamp'] as int;
-        final animeId = cacheData['animeId'] as int;
-        final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
-
-        final cacheDuration = animeId < _oldAnimeThreshold
-            ? _oldAnimeCacheDuration
-            : _newAnimeCacheDuration;
-
-        return now.difference(cacheTime) > cacheDuration;
-      });
-
       // 清理文件缓存
+      final now = DateTime.now();
       final directory = await _getDanmakuCacheDirectory();
       final files = await directory
           .list()
@@ -297,7 +209,6 @@ class DanmakuCacheManager {
   static Future<void> clearAllCache() async {
     if (kIsWeb) return;
     try {
-      _memoryCache.clear();
       final directory = await _getDanmakuCacheDirectory();
       if (!await directory.exists()) {
         return;

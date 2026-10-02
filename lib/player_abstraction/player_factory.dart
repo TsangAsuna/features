@@ -12,6 +12,7 @@ import 'package:nipaplay/services/app_http_proxy.dart';
 import 'package:nipaplay/utils/system_resource_monitor.dart'; // 导入系统资源监控器
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'dart:async'; // 导入dart:async库
+import 'dart:io'; // 开发期评估的内核覆写需要读取环境变量（见 initialize）
 
 // Define available player types if you plan to support more than one.
 // For now, it defaults to MDK or could take a parameter.
@@ -84,6 +85,25 @@ class PlayerFactory {
       _hasLoadedSettings = true;
       debugPrint('[PlayerFactory] Web平台，强制使用 Video Player 内核');
       return;
+    }
+    // 开发期评估专用（tools/perf/README.md）：允许用环境变量固定本次运行
+    // 的内核做基线对比，避免跨运行时手动改设置造成的漂移。release 不读取。
+    if (!kReleaseMode) {
+      final forcedKernel = Platform.environment['NIPAPLAY_FORCE_KERNEL'];
+      if (forcedKernel != null && forcedKernel.isNotEmpty) {
+        final lowered = forcedKernel.toLowerCase();
+        final match = PlayerKernelType.values
+            .where((type) => type.name.toLowerCase() == lowered)
+            .toList();
+        if (match.isNotEmpty) {
+          _cachedKernelType = match.first;
+          _hasLoadedSettings = true;
+          debugPrint('[PlayerFactory] 评估覆写内核: ${match.first.name}');
+          return;
+        }
+        debugPrint('[PlayerFactory] NIPAPLAY_FORCE_KERNEL=$forcedKernel '
+            '无法识别，忽略（可选: ${PlayerKernelType.values.map((t) => t.name).join('|')}）');
+      }
     }
     try {
       final prefs = await SharedPreferences.getInstance();
