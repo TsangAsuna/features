@@ -793,6 +793,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       // 小 PlayRes 文件上把字幕挤成满屏竖块）。重放同时把未偏离的字段
       // 清回默认，保证每部视频都从持久化偏好出发。
       unawaited(applySubtitleStylePreference());
+      // 内嵌字幕整块移动模式：新视频打开时同步内核渲染开关并清空
+      // 上一部视频的残留文本（轮询会重新填充）。
+      _embeddedSubtitleOverlayText = '';
+      _applyEmbeddedSubtitleOverlayKernelState();
       if ((previousSubtitleDelay - subtitleDelaySeconds).abs() >= 0.0001) {
         debugPrint(
             '[PlayerSetup] 视频打开期间字幕延迟设置变化，重放样式偏好');

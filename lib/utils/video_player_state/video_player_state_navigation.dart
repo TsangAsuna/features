@@ -853,6 +853,8 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
           if (playerPosition >= 0 && playerDuration > 0) {
             // 更新UI显示
             _position = Duration(milliseconds: playerPosition);
+            // 内嵌字幕整块移动模式：节流轮询 sub-text（文本变化才通知）
+            pollEmbeddedSubtitleOverlayText();
             // 同步当前章节索引（MKV 自带章节，参考 mpv playloop.c:607 get_current_chapter）
             _updateCurrentChapterFromPosition(playerPosition);
             final previousDurationMs = _duration.inMilliseconds;

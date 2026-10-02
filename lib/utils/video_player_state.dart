@@ -26,6 +26,7 @@ import 'package:flutter/services.dart';
 import 'package:universal_html/html.dart' as web_html;
 // Added import for subtitle parser
 import 'dart:io';
+import 'package:nipaplay/dev/perf_stats_logger.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -736,6 +737,14 @@ int _exactEndStreak = 0;
   String _subtitleFontDir = '';
   SubtitleStyleOverrideMode _subtitleOverrideMode = defaultSubtitleOverrideMode;
 
+  // 内嵌字幕整块移动模式（双语不重叠）：开启后内核只解码不渲染
+  // （sub-visibility=no），App 按 sub-text 轮询取文本整块渲染——位置
+  // 滑块移动整个字幕块（行距永不收拢）、水平边距按屏幕像素生效。
+  bool _embeddedSubtitleOverlayMode = false;
+  final String _embeddedSubtitleOverlayModeKey = 'embedded_subtitle_overlay_mode';
+  String _embeddedSubtitleOverlayText = '';
+  int _lastEmbeddedSubTextPollMs = 0;
+
   // 弹幕轨道显示区域设置
   double _danmakuDisplayArea =
       1.0; // 默认全屏显示（0.0=单行，1.0=全屏，0.67=2/3，0.33=1/3，0.25=1/4，0.125=1/8）
@@ -959,7 +968,30 @@ int _exactEndStreak = 0;
     _decoderManager = DecoderManager(player: player);
     onExternalSubtitleAutoLoaded = _onExternalSubtitleAutoLoaded;
     PlayerRemoteControlBridge.instance.attach(this);
+    if (DevPerfStatsLogger.enabled) {
+      // 开发期交付前性能评估遥测（tools/perf/README.md），非用户功能。
+      DevPerfStatsLogger.instance.start(_perfStatsSnapshot);
+    }
     _initialize();
+  }
+
+  /// tools/perf 评估用的内核侧快照：跨内核统一走 Player 门面的
+  /// getDetailedMediaInfoAsync，其余字段做兜底，任何失败都只降级记录。
+  Future<Map<String, dynamic>?> _perfStatsSnapshot() async {
+    if (_isDisposed) return null;
+    try {
+      final player = this.player;
+      final info = await player.getDetailedMediaInfoAsync();
+      return <String, dynamic>{
+        'kernel': player.getPlayerKernelName(),
+        'mediaReady': player.isMediaReady,
+        'positionMs': _position.inMilliseconds,
+        'bufferedMs': _bufferedPositionMs,
+        'info': info,
+      };
+    } catch (e) {
+      return <String, dynamic>{'error': '$e'};
+    }
   }
 
   void _scheduleVolumePersistence({bool immediate = false}) {
@@ -1815,6 +1847,7 @@ int _exactEndStreak = 0;
   @override
   void dispose() {
     _isDisposed = true;
+    unawaited(DevPerfStatsLogger.instance.stop());
     _cancelDfmStartupGate();
 
     if (_currentVideoPath != null) {

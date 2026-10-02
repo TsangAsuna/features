@@ -295,6 +295,66 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
     _notifyListeners();
   }
 
+  // ---- 内嵌字幕整块移动模式（双语不重叠）----
+
+  /// 是否开启整块移动模式。开启后内核只解码不渲染，App 按 sub-text
+  /// 整块渲染内嵌字幕：位置滑块移动整个字幕块（双语行距永不随插值
+  /// 收拢），水平边距按屏幕像素生效（PlayRes 无关）。
+  bool get embeddedSubtitleOverlayMode => _embeddedSubtitleOverlayMode;
+
+  Future<void> setEmbeddedSubtitleOverlayMode(bool enabled) async {
+    if (_embeddedSubtitleOverlayMode == enabled) return;
+    _embeddedSubtitleOverlayMode = enabled;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_embeddedSubtitleOverlayModeKey, enabled);
+    _applyEmbeddedSubtitleOverlayKernelState();
+    _notifyListeners();
+  }
+
+  /// 整块渲染的当前文本（内核 sub-text 轮询；空 = 当前无字幕）。
+  String get embeddedSubtitleOverlayText => _embeddedSubtitleOverlayText;
+
+  /// 按当前模式同步内核渲染开关。在模式切换、视频打开、内核热切换后
+  /// 调用；幂等。
+  void _applyEmbeddedSubtitleOverlayKernelState() {
+    if (kIsWeb || _isDisposed) return;
+    try {
+      if (player.getPlayerKernelName() == 'Media Kit' &&
+          _embeddedSubtitleOverlayMode &&
+          hasVideo) {
+        player.setProperty('sub-visibility', 'no');
+      } else {
+        player.setProperty('sub-visibility', 'yes');
+        if (_embeddedSubtitleOverlayText.isNotEmpty) {
+          _embeddedSubtitleOverlayText = '';
+          _notifyListeners();
+        }
+      }
+    } catch (e) {
+      debugPrint('VideoPlayerState: 同步内嵌字幕整块渲染开关失败: $e');
+    }
+  }
+
+  /// 位置 ticker 内的节流轮询入口（约 8Hz，文本变化才通知）。
+  void pollEmbeddedSubtitleOverlayText() {
+    if (!_embeddedSubtitleOverlayMode || kIsWeb || _isDisposed) return;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (nowMs - _lastEmbeddedSubTextPollMs < 120) return;
+    _lastEmbeddedSubTextPollMs = nowMs;
+    unawaited(_pollEmbeddedSubtitleOverlayText());
+  }
+
+  Future<void> _pollEmbeddedSubtitleOverlayText() async {
+    try {
+      final text = await player.getLiveProperty('sub-text') ?? '';
+      if (_isDisposed) return;
+      final trimmed = text.trim();
+      if (trimmed == _embeddedSubtitleOverlayText) return;
+      _embeddedSubtitleOverlayText = trimmed;
+      _notifyListeners();
+    } catch (_) {}
+  }
+
   // 桥接方法：获取缓存的字幕内容
   List<dynamic>? getCachedSubtitle(String path) {
     return _subtitleManager.getCachedSubtitle(path);

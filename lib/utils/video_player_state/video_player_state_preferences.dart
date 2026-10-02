@@ -1903,6 +1903,9 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
         VideoPlayerState.defaultSubtitleMarginX;
     _subtitleMarginY = prefs.getDouble(_subtitleMarginYKey) ??
         VideoPlayerState.defaultSubtitleMarginY;
+    // 内嵌字幕整块移动模式（双语不重叠）：跨会话记忆。
+    _embeddedSubtitleOverlayMode =
+        prefs.getBool(_embeddedSubtitleOverlayModeKey) ?? false;
     _subtitleOpacity = _clampSubtitleOpacity(
       prefs.getDouble(_subtitleOpacityKey) ??
           VideoPlayerState.defaultSubtitleOpacity,
@@ -2547,6 +2550,13 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       // 只下发用户实际改过的字段，未触碰字段（如双语配色）保持作者样式。
       // 字段生效前提是 sub-ass-override=yes（见下方升级规则）。
       final styleParts = <String>[];
+      // 水平边距 → ASS MarginL/MarginR（内核渲染实测）：单侧 margin 使
+      // 居中文本向对侧平移。注意 MarginL 是字幕脚本 PlayRes 坐标系的
+      // 数值，位移幅度 = 值 × (画面宽/PlayResX)：现代压制（PlayRes≈视频
+      // 宽）位移≈滑块值；老压制（PlayRes 384/640）位移放大 3~5 倍，长句
+      // 会被推出画面右缘（实测复现"字幕消失"）——无 PlayRes 无关的水平
+      // 边距原语（sub-margin-x 在裁剪版不存在），只能靠用户调滑块适配。
+      final marginXDeviates = _subtitleMarginX.abs() >= 0.5;
       final alignDeviates = _subtitleAlignX != SubtitleAlignX.center ||
           _subtitleAlignY != SubtitleAlignY.bottom;
       final borderDeviates =
@@ -2565,13 +2575,12 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
               VideoPlayerState.defaultSubtitleShadowColorValue;
       final opacityDeviates = _subtitleOpacity < 0.999;
       if (playerKernelName == 'Media Kit') {
-        // 注意：不映射水平边距。MarginL/R 是 ASS PlayRes 坐标系的值，同一
-        // 数值在 PlayResX=1920 与 384 的脚本上效果差 5 倍；实测小 PlayRes
-        // 文件上 MarginL=200 会把文字挤进半屏宽重新折行成满屏竖块（内核
-        // 渲染实测），用户感知为"字幕消失"。且 force-style 跨视频残留在
-        // 同一 Player 上，误伤下一个视频。内核也没有 PlayRes 无关的水平
-        // 边距原语（sub-margin-x 在裁剪版不存在），因此水平边距只作用于
-        // 外挂叠层，内嵌不做。
+        if (marginXDeviates) {
+          final mx = _subtitleMarginX.round();
+          styleParts.add(_subtitleAlignX == SubtitleAlignX.right
+              ? 'MarginR=$mx'
+              : 'MarginL=$mx');
+        }
         if (alignDeviates) {
           styleParts.add(
               'Alignment=${_subtitleAlignToAss(_subtitleAlignX, _subtitleAlignY)}');
