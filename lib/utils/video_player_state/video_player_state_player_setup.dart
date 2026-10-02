@@ -1240,7 +1240,9 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       if (_isDisposed || initializationGeneration != _playbackGeneration) {
         return;
       }
-      //debugPrint('初始化视频播放器时出错: $e');
+      // 播放失败必须留痕：此前这行被注释，mediaKit 内核初始化失败时
+      // 全程零日志、无限重试，只能靠导出日志盲猜（iOS 实际发生过）。
+      debugPrint('初始化视频播放器时出错: $e');
       if (kIsWeb) {
         final errorText = e.toString();
         final bool isUnsupportedFormat = e is PlatformException &&

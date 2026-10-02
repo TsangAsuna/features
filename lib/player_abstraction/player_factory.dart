@@ -3,6 +3,7 @@ import './mdk_player_adapter.dart';
 import './video_player_adapter.dart'; // 导入新的适配器
 import './media_kit_player_adapter.dart'; // 导入新的MediaKit适配器
 import './erika_player_adapter.dart';
+import 'package:media_kit/media_kit.dart'; // MediaKit.ensureInitialized（mediaKit 分支构造前必须就绪）
 import './player_data_models.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/foundation.dart'; // 用于 debugPrint
@@ -454,6 +455,20 @@ class PlayerFactory {
         debugPrint('[PlayerFactory] 创建 Video Player 播放器');
         return VideoPlayerAdapter();
       case PlayerKernelType.mediaKit:
+        debugPrint('[PlayerFactory] 创建 MediaKit 播放器');
+        // MediaKit.ensureInitialized 必须先于适配器构造：MediaKitPlayerAdapter
+        // 的初始化列表会同步创建 media_kit Player → NativePlayer，其初始化
+        // 列表立即 DynamicLibrary.open(NativeLibrary.path)——在 _resolved 为
+        // 空时直接抛 "MediaKit.ensureInitialized must be called..."。构造体
+        // 内的安全网调用永远晚于这一步（main.dart 的启动期调用又有竞态：
+        // 同步默认值 erika 先生效、用户保存的 mediaKit 异步加载后才切换），
+        // 因此这里在构造前兜底，幂等，且失败打进 debugPrint 可见于日志。
+        try {
+          MediaKit.ensureInitialized();
+        } catch (e) {
+          debugPrint('[PlayerFactory] MediaKit.ensureInitialized 失败: $e');
+          rethrow;
+        }
         return MediaKitPlayerAdapter(
           bufferSize: getPrecacheBufferSizeBytes(),
           androidAudioOutput: getAndroidAudioOutput(),
