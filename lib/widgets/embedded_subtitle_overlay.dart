@@ -24,7 +24,7 @@ class EmbeddedSubtitleOverlay extends StatelessWidget {
           return const SizedBox.shrink();
         }
         final text = videoState.embeddedSubtitleOverlayText;
-        if (text.trim().isEmpty || videoState.hasVideo == false) {
+        if (text.trim().isEmpty) {
           return const SizedBox.shrink();
         }
 

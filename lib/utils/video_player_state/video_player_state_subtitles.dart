@@ -307,7 +307,7 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
     _embeddedSubtitleOverlayMode = enabled;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_embeddedSubtitleOverlayModeKey, enabled);
-    _applyEmbeddedSubtitleOverlayKernelState();
+    applyEmbeddedSubtitleOverlayKernelState();
     _notifyListeners();
   }
 
@@ -315,13 +315,13 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   String get embeddedSubtitleOverlayText => _embeddedSubtitleOverlayText;
 
   /// 按当前模式同步内核渲染开关。在模式切换、视频打开、内核热切换后
-  /// 调用；幂等。
-  void _applyEmbeddedSubtitleOverlayKernelState() {
+  /// 调用；幂等。Media Kit 内核 + 模式开启 → sub-visibility=no（内核只
+  /// 解码不渲染）；否则恢复 yes（含模式关闭和内核切换回其它内核）。
+  void applyEmbeddedSubtitleOverlayKernelState() {
     if (kIsWeb || _isDisposed) return;
     try {
       if (player.getPlayerKernelName() == 'Media Kit' &&
-          _embeddedSubtitleOverlayMode &&
-          hasVideo) {
+          _embeddedSubtitleOverlayMode) {
         player.setProperty('sub-visibility', 'no');
       } else {
         player.setProperty('sub-visibility', 'yes');

@@ -796,7 +796,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       // 内嵌字幕整块移动模式：新视频打开时同步内核渲染开关并清空
       // 上一部视频的残留文本（轮询会重新填充）。
       _embeddedSubtitleOverlayText = '';
-      _applyEmbeddedSubtitleOverlayKernelState();
+      applyEmbeddedSubtitleOverlayKernelState();
       if ((previousSubtitleDelay - subtitleDelaySeconds).abs() >= 0.0001) {
         debugPrint(
             '[PlayerSetup] 视频打开期间字幕延迟设置变化，重放样式偏好');
