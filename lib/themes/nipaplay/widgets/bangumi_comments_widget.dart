@@ -426,7 +426,7 @@ class _BangumiCommentsWidgetState extends State<BangumiCommentsWidget> {
                       backgroundImage: my.avatarUrl.isNotEmpty
                           ? (my.avatarUrl.startsWith('assets/')
                               ? AssetImage(my.avatarUrl)
-                              : NetworkImage(_proxiedImageUrl(my.avatarUrl)))
+                              : ResizeImage(NetworkImage(_proxiedImageUrl(my.avatarUrl)), width: 126))
                           : null,
                       child: my.avatarUrl.isEmpty
                           ? Icon(Ionicons.person,
@@ -495,7 +495,7 @@ class _BangumiCommentsWidgetState extends State<BangumiCommentsWidget> {
                     backgroundImage: comment.avatarUrl.isNotEmpty
                         ? (comment.avatarUrl.startsWith('assets/')
                             ? AssetImage(comment.avatarUrl)
-                            : NetworkImage(_proxiedImageUrl(comment.avatarUrl)))
+                            : ResizeImage(NetworkImage(_proxiedImageUrl(comment.avatarUrl)), width: 126))
                         : null,
                     child: comment.avatarUrl.isEmpty
                         ? Icon(Ionicons.person,

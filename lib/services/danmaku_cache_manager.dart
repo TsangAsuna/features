@@ -12,6 +12,20 @@ class DanmakuCacheManager {
   static const Duration _oldAnimeCacheDuration = Duration(days: 7);
   static const Duration _newAnimeCacheDuration = Duration(hours: 2);
   static final Map<String, Map<String, dynamic>> _memoryCache = {};
+
+  /// 内存缓存 LRU 上限：一份解析后的弹幕 JSON（2k-10k 条）约 1.5-6MB，
+  /// 不封顶的话看过的每一集都会驻留到进程退出。命中时重新插入以维持
+  /// 访问序，超限从最旧开始淘汰（磁盘缓存仍在，回看时重新读盘）。
+  static const int _memoryCacheMaxEntries = 5;
+
+  static void _rememberInMemoryCache(
+      String episodeId, Map<String, dynamic> jsonData) {
+    _memoryCache.remove(episodeId);
+    _rememberInMemoryCache(episodeId, jsonData);
+    while (_memoryCache.length > _memoryCacheMaxEntries) {
+      _memoryCache.remove(_memoryCache.keys.first);
+    }
+  }
   static io.Directory? _cachedDanmakuDir;
   static bool _migrationAttempted = false;
 
@@ -80,7 +94,8 @@ class DanmakuCacheManager {
       // 首先检查内存缓存
       if (_memoryCache.containsKey(episodeId)) {
         //////debugPrint('找到内存缓存');
-        final cacheData = _memoryCache[episodeId]!;
+        final cacheData = _memoryCache.remove(episodeId)!;
+        _memoryCache[episodeId] = cacheData; // LRU: 刷新访问序
         final timestamp = cacheData['timestamp'] as int;
         final animeId = cacheData['animeId'] as int;
         final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
@@ -115,7 +130,7 @@ class DanmakuCacheManager {
       final isValid = now.difference(cacheTime) < cacheDuration;
       if (isValid) {
         //////debugPrint('文件缓存有效，保存到内存缓存');
-        _memoryCache[episodeId] = jsonData;
+        _rememberInMemoryCache(episodeId, jsonData);
       } else {
         //////debugPrint('文件缓存已过期');
       }
@@ -141,7 +156,7 @@ class DanmakuCacheManager {
       };
 
       // 保存到内存缓存
-      _memoryCache[episodeId] = jsonData;
+      _rememberInMemoryCache(episodeId, jsonData);
 
       // 异步保存到文件
       final file = io.File(await _getCacheFilePath(episodeId));
@@ -158,7 +173,8 @@ class DanmakuCacheManager {
       // 首先检查内存缓存
       if (_memoryCache.containsKey(episodeId)) {
         //////debugPrint('从内存缓存获取弹幕');
-        final cacheData = _memoryCache[episodeId]!;
+        final cacheData = _memoryCache.remove(episodeId)!;
+        _memoryCache[episodeId] = cacheData; // LRU: 刷新访问序
         final timestamp = cacheData['timestamp'] as int;
         final animeId = cacheData['animeId'] as int;
         final cacheTime = DateTime.fromMillisecondsSinceEpoch(timestamp);
@@ -199,7 +215,7 @@ class DanmakuCacheManager {
         'comments': uniqueComments,
         'count': uniqueComments.length
       };
-      _memoryCache[episodeId] = updatedCacheData;
+      _rememberInMemoryCache(episodeId, updatedCacheData);
 
       //////debugPrint('返回 ${uniqueComments.length} 条弹幕');
       return uniqueComments;

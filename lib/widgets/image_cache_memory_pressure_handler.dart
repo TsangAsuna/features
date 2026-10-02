@@ -38,6 +38,10 @@ class _ImageCacheMemoryPressureHandlerState
   void didHaveMemoryPressure() {
     super.didHaveMemoryPressure();
     ImageCacheManager.instance.handleMemoryPressure();
+    // 自定义磁盘缓存只覆盖部分图片；Flutter 引擎内的解码缓存（海报等）
+    // 也要一并清掉，系统低压信号才真正释放显存/堆。
+    PaintingBinding.instance.imageCache.clear();
+    PaintingBinding.instance.imageCache.clearLiveImages();
   }
 
   @override

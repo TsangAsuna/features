@@ -90,10 +90,27 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
   /// 本次解码的目标尺寸（物理像素），null 表示无法推导。
   (int?, int?)? _decodeTarget;
 
+  /// 最近一次布局尺寸（逻辑像素）。调用方未显式给出尺寸时，用它把解码
+  /// 目标约束到实际显示框，避免海报墙按服务端原图（常见 1000-2000px 宽）
+  /// 全分辨率解码 —— 一张 1500x2250 海报解码后 ~13.5MB，而 400x600 只需
+  /// ~1MB。LayoutBuilder 首帧必然触发，因此不会永远挂起。
+  Size? _lastDisplaySize;
+  bool _needsConstraintDecode = false;
+
   @override
   void initState() {
     super.initState();
-    _loadImage();
+    if (widget.width == null &&
+        widget.height == null &&
+        widget.memCacheWidth == null &&
+        widget.memCacheHeight == null) {
+      // 没有任何显式尺寸：等首次布局给出约束再解码（同帧内发生），
+      // 避免按原图全尺寸解码一次然后被约束版替换的双重开销。
+      _needsConstraintDecode = true;
+      _currentUrl = widget.imageUrl;
+    } else {
+      _loadImage();
+    }
   }
 
   @override
@@ -207,6 +224,12 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
         width ??= (logicalWidth * ratio).round();
         height ??= (logicalHeight * ratio).round();
       }
+      // 无显式尺寸时回退到实际布局框（首帧后必有值）。
+      final display = _lastDisplaySize;
+      if ((width == null || height == null) && display != null) {
+        width ??= (display.width * ratio).round();
+        height ??= (display.height * ratio).round();
+      }
     }
 
     if (width != null && width <= 0) width = null;
@@ -316,6 +339,28 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
     }();
   }
 
+  /// 布局回调：首帧把约束尺寸交给尚未解码的图片；后续布局仅在显示框
+  /// 显著变大（>25%，例如进入大图模式）时才按新约束重新解码，避免滚动
+  /// 引起的微重排反复解码。
+  void _consumeLayoutForDecodeTarget(Size? displaySize) {
+    if (displaySize == null || _isDisposed) return;
+    final previous = _lastDisplaySize;
+    _lastDisplaySize = displaySize;
+    if (_needsConstraintDecode) {
+      _needsConstraintDecode = false;
+      _currentUrl = null;
+      _loadImage();
+      return;
+    }
+    if (previous != null &&
+        (displaySize.width > previous.width * 1.25 ||
+            displaySize.height > previous.height * 1.25)) {
+      // 显著变大才重解码；_decodeTarget 会随之更新（_loadImage 内）。
+      _currentUrl = null;
+      _loadImage();
+    }
+  }
+
   Size? _resolveDisplaySize(BoxConstraints constraints) {
     double? width = widget.width;
     if (width != null && !width.isFinite) {
@@ -415,6 +460,7 @@ class _CachedNetworkImageWidgetState extends State<CachedNetworkImageWidget> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final displaySize = _resolveDisplaySize(constraints);
+          _consumeLayoutForDecodeTarget(displaySize);
 
           return FutureBuilder<ui.Image>(
             // A resized decode may reuse its previous frame, but a new URL

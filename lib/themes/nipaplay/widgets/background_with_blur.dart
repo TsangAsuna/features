@@ -13,6 +13,18 @@ import 'package:provider/provider.dart';
 const String backgroundImageUrl = 'assets/images/main_image.png';
 const String backgroundImageUrl2 = 'assets/images/main_image2.png';
 
+/// The bundled background is a 3840x2160 PNG; decoded native-res that is
+/// ~33 MB held for the whole session (and larger than the imageCache cap, so
+/// it is never evictable). The background is always blurred/dimmed, so
+/// decoding at the device's short edge x DPR (capped) keeps it visually
+/// identical while shrinking the resident cost to a few MB.
+int _backgroundDecodeWidth(BuildContext context) {
+  final size = MediaQuery.sizeOf(context);
+  final shortestSidePx =
+      (size.shortestSide * MediaQuery.devicePixelRatioOf(context)).round();
+  return shortestSidePx.clamp(720, 2560);
+}
+
 const _themeTransitionDuration = Duration(milliseconds: 420);
 const _themeTransitionCurve = Curves.easeInOutCubic;
 
@@ -117,15 +129,29 @@ class BackgroundBackdrop extends StatelessWidget {
         color: baseColor,
       );
     } else if (globals.backgroundImageMode == '看板娘') {
-      return buildComposite(Image.asset(backgroundImageUrl, fit: BoxFit.cover));
+      return buildComposite(
+        Image.asset(
+          backgroundImageUrl,
+          fit: BoxFit.cover,
+          cacheWidth: _backgroundDecodeWidth(context),
+        ),
+      );
     } else if (globals.backgroundImageMode == '看板娘2') {
       return buildComposite(
-        Image.asset(backgroundImageUrl2, fit: BoxFit.cover),
+        Image.asset(
+          backgroundImageUrl2,
+          fit: BoxFit.cover,
+          cacheWidth: _backgroundDecodeWidth(context),
+        ),
       );
     } else if (globals.backgroundImageMode == '自定义') {
       if (kIsWeb) {
         return buildComposite(
-          Image.asset(backgroundImageUrl, fit: BoxFit.cover),
+          Image.asset(
+            backgroundImageUrl,
+            fit: BoxFit.cover,
+            cacheWidth: _backgroundDecodeWidth(context),
+          ),
         );
       }
       final file = File(globals.customBackgroundPath);
@@ -134,18 +160,33 @@ class BackgroundBackdrop extends StatelessWidget {
           Image.file(
             file,
             fit: BoxFit.cover,
+            cacheWidth: _backgroundDecodeWidth(context),
             errorBuilder: (context, error, stackTrace) {
-              return Image.asset(backgroundImageUrl, fit: BoxFit.cover);
+              return Image.asset(
+                backgroundImageUrl,
+                fit: BoxFit.cover,
+                cacheWidth: _backgroundDecodeWidth(context),
+              );
             },
           ),
         );
       } else {
         return buildComposite(
-          Image.asset(backgroundImageUrl, fit: BoxFit.cover),
+          Image.asset(
+            backgroundImageUrl,
+            fit: BoxFit.cover,
+            cacheWidth: _backgroundDecodeWidth(context),
+          ),
         );
       }
     }
-    return buildComposite(Image.asset(backgroundImageUrl, fit: BoxFit.cover));
+    return buildComposite(
+      Image.asset(
+        backgroundImageUrl,
+        fit: BoxFit.cover,
+        cacheWidth: _backgroundDecodeWidth(context),
+      ),
+    );
   }
 }
 

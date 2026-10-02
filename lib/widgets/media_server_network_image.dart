@@ -153,6 +153,24 @@ class _MediaServerNetworkImageState extends State<MediaServerNetworkImage> {
     return _loadCachedImage(widget.uri, loader);
   }
 
+  /// 调用方未显式给解码尺寸时，按自身显示宽度 × DPR 推导（封顶 2048），
+  /// 让库卡片/头像/缩略图等固定槽位不再按服务端原图（常见 1000px+）解码。
+  int? _resolveCacheWidth(BuildContext context) {
+    if (widget.cacheWidth != null) return widget.cacheWidth;
+    final w = widget.width;
+    if (w == null || !w.isFinite || w <= 0) return null;
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    return (w * ratio).round().clamp(1, 2048);
+  }
+
+  int? _resolveCacheHeight(BuildContext context) {
+    if (widget.cacheHeight != null) return widget.cacheHeight;
+    final h = widget.height;
+    if (h == null || !h.isFinite || h <= 0) return null;
+    final ratio = MediaQuery.devicePixelRatioOf(context);
+    return (h * ratio).round().clamp(1, 2048);
+  }
+
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Uint8List>(
@@ -166,8 +184,8 @@ class _MediaServerNetworkImageState extends State<MediaServerNetworkImage> {
             height: widget.height,
             fit: widget.fit,
             filterQuality: widget.filterQuality,
-            cacheWidth: widget.cacheWidth,
-            cacheHeight: widget.cacheHeight,
+            cacheWidth: _resolveCacheWidth(context),
+            cacheHeight: _resolveCacheHeight(context),
             errorBuilder: widget.errorBuilder,
           );
           return widget.loadingBuilder?.call(context, image, null) ?? image;
@@ -278,6 +296,14 @@ class MediaServerAwareCachedNetworkImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final uri = Uri.parse(imageUrl);
+    // 调用方未给解码尺寸且自身宽度有限时，按显示宽度 × DPR 推导，
+    // 避免固定槽位按服务端原图解码。
+    final effectiveCacheWidth = cacheWidth ??
+        (width != null && width!.isFinite && width! > 0
+            ? (width! * MediaQuery.devicePixelRatioOf(context))
+                .round()
+                .clamp(1, 2048)
+            : null);
     if (isMediaServerImageUri(uri) ||
         NetworkSettings.isDandanplayServiceUri(
             DandanplayHttpClient.targetUri(uri))) {
@@ -287,7 +313,7 @@ class MediaServerAwareCachedNetworkImage extends StatelessWidget {
         height: height,
         fit: fit,
         loader: loader,
-        cacheWidth: cacheWidth,
+        cacheWidth: effectiveCacheWidth,
         cacheHeight: cacheHeight,
         errorBuilder: (context, error, _) =>
             errorWidget?.call(context, imageUrl, error) ??
@@ -299,7 +325,7 @@ class MediaServerAwareCachedNetworkImage extends StatelessWidget {
       width: width,
       height: height,
       fit: fit,
-      memCacheWidth: cacheWidth,
+      memCacheWidth: effectiveCacheWidth,
       memCacheHeight: cacheHeight,
       errorWidget: errorWidget,
     );

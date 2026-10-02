@@ -926,6 +926,8 @@ class _DashboardHomePageState extends State<DashboardHomePage>
 
   @override
   void dispose() {
+    _todayAnimesScrollController?.dispose();
+    _todayAnimesScrollController = null;
     debugPrint('DashboardHomePage: 开始销毁Widget');
 
     // 清理定时器和ValueNotifier
