@@ -846,6 +846,13 @@ extension VideoPlayerStateNavigation on VideoPlayerState {
       }
 
       if (!_isSeeking && hasVideo) {
+        // 内嵌字幕整块移动模式：暂停时也轮询（减频）——暂停下滑动样式
+        // 滑块时文本必须保持新鲜，否则旧句在内核样式重算后被推出画面
+        // （老压制 MarginL 放大），用户感知为"滑动后字幕消失，seek 才
+        // 回来"。轮询内部自带 120ms 节流，此处的 800ms 只是暂停省电档。
+        if (embeddedSubtitleOverlayMode && _status != PlayerStatus.playing) {
+          pollEmbeddedSubtitleOverlayTextPaused();
+        }
         if (_status == PlayerStatus.playing) {
           var playerPosition = player.position;
           final playerDuration = player.mediaInfo.duration;

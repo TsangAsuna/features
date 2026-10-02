@@ -23,7 +23,7 @@ class EmbeddedSubtitleOverlay extends StatelessWidget {
           // 截图「隐藏字幕」：仅在截图帧合成期间隐藏，不影响观看。
           return const SizedBox.shrink();
         }
-        final text = videoState.embeddedSubtitleOverlayText;
+        final text = videoState.embeddedSubtitleOverlayDisplayText;
         if (text.trim().isEmpty) {
           return const SizedBox.shrink();
         }

@@ -314,6 +314,27 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   /// 整块渲染的当前文本（内核 sub-text 轮询；空 = 当前无字幕）。
   String get embeddedSubtitleOverlayText => _embeddedSubtitleOverlayText;
 
+  /// 双语行序翻转：sub-text 的行序由内核事件排序决定，可能与"翻译在上"
+  /// 的屏幕期望相反；开启后渲染时把行序倒过来。
+  bool get embeddedSubtitleOverlayReversed => _embeddedSubtitleOverlayReversed;
+
+  Future<void> setEmbeddedSubtitleOverlayReversed(bool reversed) async {
+    if (_embeddedSubtitleOverlayReversed == reversed) return;
+    _embeddedSubtitleOverlayReversed = reversed;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_embeddedSubtitleOverlayReversedKey, reversed);
+    _notifyListeners();
+  }
+
+  /// 整块渲染实际使用的文本：行序翻转开启且文本多于一行时倒序拼接。
+  String get embeddedSubtitleOverlayDisplayText {
+    final text = _embeddedSubtitleOverlayText;
+    if (!_embeddedSubtitleOverlayReversed || !text.contains('\n')) {
+      return text;
+    }
+    return text.split('\n').reversed.join('\n');
+  }
+
   /// 按当前模式同步内核渲染开关。在模式切换、视频打开、内核热切换后
   /// 调用；幂等。Media Kit 内核 + 模式开启 → sub-visibility=no（内核只
   /// 解码不渲染）；否则恢复 yes（含模式关闭和内核切换回其它内核）。
@@ -340,6 +361,17 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
     if (!_embeddedSubtitleOverlayMode || kIsWeb || _isDisposed) return;
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     if (nowMs - _lastEmbeddedSubTextPollMs < 120) return;
+    _lastEmbeddedSubTextPollMs = nowMs;
+    unawaited(_pollEmbeddedSubtitleOverlayText());
+  }
+
+  /// 暂停态的减频轮询（ticker 仍每帧调用，这里按 800ms 节流）：
+  /// 暂停下滑动样式滑块时保持文本新鲜——否则旧句在内核样式重算后
+  /// 被推出画面，用户感知为"滑动后字幕消失，seek 才回来"。
+  void pollEmbeddedSubtitleOverlayTextPaused() {
+    if (!_embeddedSubtitleOverlayMode || kIsWeb || _isDisposed) return;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (nowMs - _lastEmbeddedSubTextPollMs < 800) return;
     _lastEmbeddedSubTextPollMs = nowMs;
     unawaited(_pollEmbeddedSubtitleOverlayText());
   }

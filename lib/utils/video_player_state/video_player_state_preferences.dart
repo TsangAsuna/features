@@ -1923,6 +1923,8 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     // 内嵌字幕整块移动模式（双语不重叠）：跨会话记忆。
     _embeddedSubtitleOverlayMode =
         prefs.getBool(_embeddedSubtitleOverlayModeKey) ?? false;
+    _embeddedSubtitleOverlayReversed =
+        prefs.getBool(_embeddedSubtitleOverlayReversedKey) ?? false;
     _subtitleOpacity = _clampSubtitleOpacity(
       prefs.getDouble(_subtitleOpacityKey) ??
           VideoPlayerState.defaultSubtitleOpacity,

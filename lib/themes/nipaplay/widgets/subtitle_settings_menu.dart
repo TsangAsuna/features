@@ -618,6 +618,18 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
                   value: videoState.embeddedSubtitleOverlayMode,
                   onChanged: (v) => videoState.setEmbeddedSubtitleOverlayMode(v),
                 ),
+                // 多事件双语的 sub-text 行序由内核事件排序决定，可能与
+                // "翻译在上"的期望相反（实测出现过日语在上）。仅在该模式
+                // 开启时显示，翻转渲染行序。
+                if (videoState.embeddedSubtitleOverlayMode) ...[
+                  const SizedBox(height: 8),
+                  _buildSwitchRow(
+                    label: '双语行序翻转（翻译在上）',
+                    value: videoState.embeddedSubtitleOverlayReversed,
+                    onChanged: (v) =>
+                        videoState.setEmbeddedSubtitleOverlayReversed(v),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Text(
                   '开启后内嵌字幕改由界面整块渲染：位置/水平边距移动整个字幕块，'

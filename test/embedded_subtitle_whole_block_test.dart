@@ -136,6 +136,36 @@ void main() {
     expect(videoState.embeddedSubtitleOverlayText, isEmpty);
   });
 
+  testWidgets('line-order flip renders the reversed block', (tester) async {
+    final delegate = _FakeMediaKitDelegate(liveProperties: {
+      'sub-text': '中文翻译行\n日本語原文行',
+    });
+    final videoState = await _buildVideoPlayerState(delegate);
+    await videoState.setEmbeddedSubtitleOverlayMode(true);
+    videoState.pollEmbeddedSubtitleOverlayText();
+    await tester.pump();
+    await tester.pump();
+
+    // 默认：跟随 sub-text 原序（翻译在上）。
+    expect(videoState.embeddedSubtitleOverlayDisplayText,
+        '中文翻译行\n日本語原文行');
+
+    // 开启翻转：日语行到上方（多事件双语的内核行序可能与期望相反）。
+    await videoState.setEmbeddedSubtitleOverlayReversed(true);
+    expect(videoState.embeddedSubtitleOverlayDisplayText,
+        '日本語原文行\n中文翻译行');
+    await tester.pumpWidget(_wrap(
+      const SizedBox(
+        width: 800,
+        height: 600,
+        child: EmbeddedSubtitleOverlay(),
+      ),
+      videoState,
+    ));
+    await tester.pump();
+    expect(find.text('日本語原文行\n中文翻译行'), findsNWidgets(2));
+  });
+
   testWidgets('bilingual block renders both lines at slider 0 and 100',
       (tester) async {
     final delegate = _FakeMediaKitDelegate(liveProperties: {
