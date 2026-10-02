@@ -748,11 +748,6 @@ int _exactEndStreak = 0;
   final String _embeddedSubtitleOverlayModeKey = 'embedded_subtitle_overlay_mode';
   String _embeddedSubtitleOverlayText = '';
   int _lastEmbeddedSubTextPollMs = 0;
-  // 双语行序翻转：多事件双语的 sub-text 行序由内核事件排序决定，可能与
-  // 屏幕期望（翻译在上）相反；开启后渲染时把行序倒过来。
-  bool _embeddedSubtitleOverlayReversed = false;
-  final String _embeddedSubtitleOverlayReversedKey =
-      'embedded_subtitle_overlay_reversed';
 
   // 弹幕轨道显示区域设置
   double _danmakuDisplayArea =

@@ -314,25 +314,34 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   /// 整块渲染的当前文本（内核 sub-text 轮询；空 = 当前无字幕）。
   String get embeddedSubtitleOverlayText => _embeddedSubtitleOverlayText;
 
-  /// 双语行序翻转：sub-text 的行序由内核事件排序决定，可能与"翻译在上"
-  /// 的屏幕期望相反；开启后渲染时把行序倒过来。
-  bool get embeddedSubtitleOverlayReversed => _embeddedSubtitleOverlayReversed;
-
-  Future<void> setEmbeddedSubtitleOverlayReversed(bool reversed) async {
-    if (_embeddedSubtitleOverlayReversed == reversed) return;
-    _embeddedSubtitleOverlayReversed = reversed;
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_embeddedSubtitleOverlayReversedKey, reversed);
-    _notifyListeners();
-  }
-
-  /// 整块渲染实际使用的文本：行序翻转开启且文本多于一行时倒序拼接。
+  /// 整块渲染实际使用的文本：双语行序自动修正。多事件双语的 sub-text
+  /// 行序由内核事件排序决定，可能与"汉化在上、原文在下"相反（实测出现
+  /// 过日语在上）。判定规则：含日文假名（平/片假名）的行是原文排下方，
+  /// 纯汉字行是汉化排上方；全日文或全中文（无假名可判）保持原序。
   String get embeddedSubtitleOverlayDisplayText {
     final text = _embeddedSubtitleOverlayText;
-    if (!_embeddedSubtitleOverlayReversed || !text.contains('\n')) {
-      return text;
+    if (!text.contains('\n')) return text;
+    final lines = text.split('\n');
+    bool hasKana(String s) {
+      for (final r in s.runes) {
+        if ((r >= 0x3041 && r <= 0x309F) || // 平假名
+            (r >= 0x30A0 && r <= 0x30FF) || // 片假名
+            (r >= 0x31F0 && r <= 0x31FF) || // 片假名音标扩展
+            (r >= 0xFF66 && r <= 0xFF9D)) {
+          // 半角片假名
+          return true;
+        }
+      }
+      return false;
     }
-    return text.split('\n').reversed.join('\n');
+
+    final kanaCount = lines.where(hasKana).length;
+    // 无假名（全中文/纯汉字日文）或全带假名（纯日文多行）：无判别依据，
+    // 保持内核原序。
+    if (kanaCount == 0 || kanaCount == lines.length) return text;
+    final japanese = lines.where(hasKana).toList();
+    final chinese = lines.where((l) => !hasKana(l)).toList();
+    return [...chinese, ...japanese].join('\n');
   }
 
   /// 按当前模式同步内核渲染开关。在模式切换、视频打开、内核热切换后
@@ -385,6 +394,14 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
       _embeddedSubtitleOverlayText = trimmed;
       _notifyListeners();
     } catch (_) {}
+  }
+
+  /// 测试专用：直接注入整块文本（绕过轮询节流——节流用真实时钟，
+  /// 在 widget 测试的 FakeAsync 时区里无法用 pump 推进）。
+  @visibleForTesting
+  void debugSetEmbeddedSubtitleOverlayText(String text) {
+    _embeddedSubtitleOverlayText = text;
+    _notifyListeners();
   }
 
   // 桥接方法：获取缓存的字幕内容

@@ -22,7 +22,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class _FakeMediaKitDelegate extends Fake implements MediaKitPlayerAdapter {
   _FakeMediaKitDelegate({this.liveProperties = const {}});
 
-  final Map<String, String> liveProperties;
+  Map<String, String> liveProperties;
   final Map<String, String> writtenProperties = {};
 
   @override
@@ -136,9 +136,11 @@ void main() {
     expect(videoState.embeddedSubtitleOverlayText, isEmpty);
   });
 
-  testWidgets('line-order flip renders the reversed block', (tester) async {
+  testWidgets('bilingual line order auto-corrects: translation above, original below',
+      (tester) async {
     final delegate = _FakeMediaKitDelegate(liveProperties: {
-      'sub-text': '中文翻译行\n日本語原文行',
+      // 内核事件排序把日文行放在前面（实测出现过的反序）
+      'sub-text': '日本語原文行テスト\n中文翻译行',
     });
     final videoState = await _buildVideoPlayerState(delegate);
     await videoState.setEmbeddedSubtitleOverlayMode(true);
@@ -146,14 +148,9 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    // 默认：跟随 sub-text 原序（翻译在上）。
+    // 含假名的行判定为原文排下方，纯汉字行是汉化排上方——无需手动开关。
     expect(videoState.embeddedSubtitleOverlayDisplayText,
-        '中文翻译行\n日本語原文行');
-
-    // 开启翻转：日语行到上方（多事件双语的内核行序可能与期望相反）。
-    await videoState.setEmbeddedSubtitleOverlayReversed(true);
-    expect(videoState.embeddedSubtitleOverlayDisplayText,
-        '日本語原文行\n中文翻译行');
+        '中文翻译行\n日本語原文行テスト');
     await tester.pumpWidget(_wrap(
       const SizedBox(
         width: 800,
@@ -163,7 +160,20 @@ void main() {
       videoState,
     ));
     await tester.pump();
-    expect(find.text('日本語原文行\n中文翻译行'), findsNWidgets(2));
+    expect(find.text('中文翻译行\n日本語原文行テスト'), findsNWidgets(2));
+
+    // 内核本来就给正序时结果不变。（轮询有 120ms 真实时钟节流，测试里
+    // 用 debug 注入口直接设文本。）
+    videoState.debugSetEmbeddedSubtitleOverlayText('中文翻译行\n日本語原文行テスト');
+    await tester.pump();
+    expect(videoState.embeddedSubtitleOverlayDisplayText,
+        '中文翻译行\n日本語原文行テスト');
+
+    // 全带假名（纯日文多行）：无判别依据，保持内核原序。
+    videoState.debugSetEmbeddedSubtitleOverlayText('日本語一行目\n日本語二行目');
+    await tester.pump();
+    expect(videoState.embeddedSubtitleOverlayDisplayText,
+        '日本語一行目\n日本語二行目');
   });
 
   testWidgets('bilingual block renders both lines at slider 0 and 100',
