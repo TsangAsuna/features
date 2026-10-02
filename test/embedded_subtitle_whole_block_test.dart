@@ -183,6 +183,26 @@ void main() {
       ).first,
     );
     expect((alignAtBottom.alignment as Alignment).y, 1);
+
+    // 垂直边距：与内核路径同一折算（10px ≈ 1% 位置百分比、向上移动）。
+    await videoState.setSubtitleMarginY(200);
+    await tester.pumpWidget(_wrap(
+      const SizedBox(
+        width: 800,
+        height: 600,
+        child: EmbeddedSubtitleOverlay(),
+      ),
+      videoState,
+    ));
+    await tester.pump();
+    final alignWithMargin = tester.widget<Align>(
+      find.ancestor(
+        of: find.textContaining('中文翻译行'),
+        matching: find.byType(Align),
+      ).first,
+    );
+    // 位置 100 - 200*0.1 = 80 → (80/100)*2-1 = 0.6
+    expect((alignWithMargin.alignment as Alignment).y, closeTo(0.6, 0.001));
   });
 }
 

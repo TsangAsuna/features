@@ -117,8 +117,12 @@ class EmbeddedSubtitleOverlay extends StatelessWidget {
                         alignment: Alignment(
                           _resolveHorizontalAlignment(
                               videoState.subtitleAlignX),
+                          // 垂直边距与内核路径同一折算：10px ≈ 1% 位置
+                          // 百分比、向上移动，与位置滑块同通道叠加。
                           _resolveVerticalAlignment(
-                              videoState.subtitlePosition),
+                              (videoState.subtitlePosition -
+                                      videoState.subtitleMarginY * 0.1)
+                                  .clamp(0.0, 100.0)),
                         ),
                         child: Transform.translate(
                           offset: Offset(videoState.subtitleMarginX, 0),
