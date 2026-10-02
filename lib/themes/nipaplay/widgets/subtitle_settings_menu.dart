@@ -601,30 +601,36 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
               ? '整块移动模式：双语行距不随滑块收拢'
               : '0=顶部，100=底部',
         ),
-        // 双语整块移动（仅 libmpv）：内核内核渲染的 ASS 轨受 libass 逐行
+        // 双语整块移动（仅 libmpv）：内核渲染的 ASS 轨受 libass 逐行
         // 插值约束——位置偏离 100 时双语两行按比例收拢、0 处在顶端重叠
         // （内核语义，无整体平移原语）。此开关把内嵌字幕改为 App 整块渲
         // 染（sub-text 轮询），位置/边距按块生效，行距永不变化；代价是
         // 字幕样式改用应用渲染（跟随下方全局设置，不再保留 ASS 特效）。
-        if (embeddedOverlayAvailable) ...[
-          _buildSwitchRow(
-            label: '双语整块移动（不重叠）',
-            value: videoState.embeddedSubtitleOverlayMode,
-            onChanged: (v) => videoState.setEmbeddedSubtitleOverlayMode(v),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(
-              '开启后内嵌字幕改由界面整块渲染：位置/水平边距移动整个字幕块，'
-              '双语行距固定不重叠；字幕样式跟随下方全局设置，ASS 特效不再生效',
-              locale: const Locale('zh', 'CN'),
-              style: TextStyle(
-                color: menuColors.foreground.withValues(alpha: 0.55),
-                fontSize: 12,
-              ),
+        // 布局与【粗体】【斜体】开关完全一致（同一 16px 内边距容器）。
+        if (embeddedOverlayAvailable)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildSwitchRow(
+                  label: '双语整块移动（不重叠）',
+                  value: videoState.embeddedSubtitleOverlayMode,
+                  onChanged: (v) => videoState.setEmbeddedSubtitleOverlayMode(v),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '开启后内嵌字幕改由界面整块渲染：位置/水平边距移动整个字幕块，'
+                  '双语行距固定不重叠；字幕样式跟随下方全局设置，ASS 特效不再生效',
+                  locale: const Locale('zh', 'CN'),
+                  style: TextStyle(
+                    color: menuColors.foreground.withValues(alpha: 0.55),
+                    fontSize: 12,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
       ],
     );
   }

@@ -91,23 +91,47 @@ class EmbeddedSubtitleOverlay extends StatelessWidget {
                     style: fillStyle,
                   );
 
-            return Opacity(
-              opacity: videoState.subtitleOpacity.clamp(0.0, 1.0),
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                child: Align(
-                  alignment: Alignment(
-                    _resolveHorizontalAlignment(videoState.subtitleAlignX),
-                    _resolveVerticalAlignment(videoState.subtitlePosition),
+        return Opacity(
+          opacity: videoState.subtitleOpacity.clamp(0.0, 1.0),
+          child: LayoutBuilder(
+            builder: (context, stage) {
+              // 字幕块约束在视频显示矩形内（黑边不可达）：位置 100=视频
+              // 底边，与内核 sub-pos 语义一致；水平边距保持舞台像素
+              // （竖屏下视频宽=舞台宽，距离不变）。
+              final videoRect = _videoRect(
+                stage.maxWidth,
+                stage.maxHeight,
+                videoState.aspectRatio,
+              );
+              return Stack(
+                children: [
+                  Positioned(
+                    left: videoRect.left,
+                    top: videoRect.top,
+                    width: videoRect.width,
+                    height: videoRect.height,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 16),
+                      child: Align(
+                        alignment: Alignment(
+                          _resolveHorizontalAlignment(
+                              videoState.subtitleAlignX),
+                          _resolveVerticalAlignment(
+                              videoState.subtitlePosition),
+                        ),
+                        child: Transform.translate(
+                          offset: Offset(videoState.subtitleMarginX, 0),
+                          child: textBlock,
+                        ),
+                      ),
+                    ),
                   ),
-                  child: Transform.translate(
-                    offset: Offset(videoState.subtitleMarginX, 0),
-                    child: textBlock,
-                  ),
-                ),
-              ),
-            );
+                ],
+              );
+            },
+          ),
+        );
           },
         );
       },
@@ -136,12 +160,31 @@ class EmbeddedSubtitleOverlay extends StatelessWidget {
     }
   }
 
-  /// 0=屏幕顶 100=屏幕底（与外挂叠层同一映射，整块移动、行距不收拢）。
+  /// 0=视频顶 100=视频底（与内核 sub-pos 同参照：整块移动模式下位置滑
+  /// 块的语义与内核模式一致，字幕永不进入黑边）。
   double _resolveVerticalAlignment(double subtitlePosition) {
     final normalized = subtitlePosition.clamp(
       VideoPlayerState.minSubtitlePosition,
       VideoPlayerState.maxSubtitlePosition,
     );
     return (normalized / 100) * 2.0 - 1.0;
+  }
+
+  /// 按播放舞台尺寸与视频宽高比计算 contain 适配后的视频显示矩形
+  /// （视频面是 Center+AspectRatio 居中，黑边在矩形之外）。
+  Rect _videoRect(double stageW, double stageH, double aspect) {
+    if (aspect <= 0) aspect = 16 / 9;
+    double videoW;
+    double videoH;
+    if (stageW / stageH > aspect) {
+      videoH = stageH;
+      videoW = stageH * aspect;
+    } else {
+      videoW = stageW;
+      videoH = stageW / aspect;
+    }
+    final left = (stageW - videoW) / 2;
+    final top = (stageH - videoH) / 2;
+    return Rect.fromLTWH(left, top, videoW, videoH);
   }
 }
