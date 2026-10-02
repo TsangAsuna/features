@@ -2547,7 +2547,6 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       // 只下发用户实际改过的字段，未触碰字段（如双语配色）保持作者样式。
       // 字段生效前提是 sub-ass-override=yes（见下方升级规则）。
       final styleParts = <String>[];
-      final marginXDeviates = _subtitleMarginX.abs() >= 0.5;
       final alignDeviates = _subtitleAlignX != SubtitleAlignX.center ||
           _subtitleAlignY != SubtitleAlignY.bottom;
       final borderDeviates =
@@ -2566,15 +2565,13 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
               VideoPlayerState.defaultSubtitleShadowColorValue;
       final opacityDeviates = _subtitleOpacity < 0.999;
       if (playerKernelName == 'Media Kit') {
-        if (marginXDeviates) {
-          final mx = _subtitleMarginX.round();
-          // 只发单侧 margin：居中对齐下对称的 MarginL/R 只会缩窄换行
-          // 宽度、不产生位移（ASS 数学特性，居中文本始终在剩余区域居中）。
-          // 左边缘距离 → MarginL（居中时字幕右移 v/2）；右对齐 → MarginR。
-          styleParts.add(_subtitleAlignX == SubtitleAlignX.right
-              ? 'MarginR=$mx'
-              : 'MarginL=$mx');
-        }
+        // 注意：不映射水平边距。MarginL/R 是 ASS PlayRes 坐标系的值，同一
+        // 数值在 PlayResX=1920 与 384 的脚本上效果差 5 倍；实测小 PlayRes
+        // 文件上 MarginL=200 会把文字挤进半屏宽重新折行成满屏竖块（内核
+        // 渲染实测），用户感知为"字幕消失"。且 force-style 跨视频残留在
+        // 同一 Player 上，误伤下一个视频。内核也没有 PlayRes 无关的水平
+        // 边距原语（sub-margin-x 在裁剪版不存在），因此水平边距只作用于
+        // 外挂叠层，内嵌不做。
         if (alignDeviates) {
           styleParts.add(
               'Alignment=${_subtitleAlignToAss(_subtitleAlignX, _subtitleAlignY)}');

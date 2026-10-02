@@ -643,18 +643,40 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
   }
 
   Widget _buildMarginSection(VideoPlayerState videoState) {
+    final menuColors = PlayerMenuTheme.colorsOf(context);
+    final kernelName = videoState.player.getPlayerKernelName();
+    final kernelSupportsEmbeddedMarginX = kernelName != 'Media Kit' &&
+        kernelName != 'Erika' &&
+        kernelName != '未知';
     return Column(
       children: [
-        _buildSliderSection(
-          label: '水平边距',
-          value: videoState.subtitleMarginX,
-          min: 0,
-          max: 200,
-          step: 1.0,
-          displayTextBuilder: (v) => '${v.toStringAsFixed(0)}px',
-          onChanged: videoState.setSubtitleMarginX,
-          hint: '左边缘距离（居中对齐时字幕右移）',
-        ),
+        if (kernelSupportsEmbeddedMarginX)
+          _buildSliderSection(
+            label: '水平边距',
+            value: videoState.subtitleMarginX,
+            min: 0,
+            max: 200,
+            step: 1.0,
+            displayTextBuilder: (v) => '${v.toStringAsFixed(0)}px',
+            onChanged: videoState.setSubtitleMarginX,
+            hint: '字幕与左右边缘距离',
+          )
+        else
+          // Media Kit 裁剪版 libmpv 无 sub-margin-x；ASS MarginL 是
+          // PlayRes 坐标系数值（实测小 PlayRes 文件上会重折行成满屏竖
+          // 块，感知为字幕消失），故内嵌水平边距不做，只保留外挂叠层
+          // 的长按拖动。
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Text(
+              '当前内核不支持内嵌字幕水平边距；外挂字幕可长按拖动调整水平位置',
+              locale: const Locale('zh', 'CN'),
+              style: TextStyle(
+                color: menuColors.foreground.withValues(alpha: 0.55),
+                fontSize: 12,
+              ),
+            ),
+          ),
         _buildSliderSection(
           label: '垂直边距',
           value: videoState.subtitleMarginY,

@@ -787,8 +787,15 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
 
       final previousSubtitleDelay = subtitleDelaySeconds;
       _duration = Duration(milliseconds: player.mediaInfo.duration);
+      // 每个视频无条件重放一次样式偏好：内核属性（sub-pos、
+      // sub-ass-force-style）挂在 Player 实例上跨视频残留，条件重放会让
+      // 上一部视频的边距/位置泄到这一部（实测 force-style 的 MarginL 在
+      // 小 PlayRes 文件上把字幕挤成满屏竖块）。重放同时把未偏离的字段
+      // 清回默认，保证每部视频都从持久化偏好出发。
+      unawaited(applySubtitleStylePreference());
       if ((previousSubtitleDelay - subtitleDelaySeconds).abs() >= 0.0001) {
-        unawaited(applySubtitleStylePreference());
+        debugPrint(
+            '[PlayerSetup] 视频打开期间字幕延迟设置变化，重放样式偏好');
       }
       unawaited(_setupTimelinePreviewForVideo(videoPath));
 

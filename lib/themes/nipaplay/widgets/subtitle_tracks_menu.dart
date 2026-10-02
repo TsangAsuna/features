@@ -922,14 +922,6 @@ class _SubtitleTracksMenuState extends State<SubtitleTracksMenu> {
                   }
                   // --- End Get Title and Language ---
 
-                  // 副字幕轨状态：以 mpv 轨道 id（metadata['id']）对账
-                  final trackIdFromMetadata =
-                      track.metadata['id']?.toString() ?? '';
-                  final isSecondaryTrack =
-                      trackIdFromMetadata.isNotEmpty &&
-                          videoState.secondarySubtitleTrackId ==
-                              trackIdFromMetadata;
-
                   return Material(
                     color: Colors.transparent,
                     child: InkWell(
@@ -1008,39 +1000,6 @@ class _SubtitleTracksMenuState extends State<SubtitleTracksMenu> {
                                 ],
                               ),
                             ),
-                            // 副字幕轨开关（仅 libmpv）：双语 MKV 的"翻译+原文"
-                            // 双轨同显——副轨由内核渲染在顶部，与主轨独立定位，
-                            // 避开单轨内多行事件随位置滑块收拢重叠的问题。
-                            if (videoState.player.getPlayerKernelName() ==
-                                'Media Kit')
-                              IconButton(
-                                icon: Icon(
-                                  Icons.filter_2,
-                                  size: 20,
-                                  color: isSecondaryTrack
-                                      ? menuColors.accent
-                                      : menuColors.secondaryForeground,
-                                ),
-                                tooltip: isSecondaryTrack
-                                    ? '取消第二字幕轨'
-                                    : '设为第二字幕轨（顶部同显，主轨不受影响）',
-                                onPressed: () {
-                                  if (isActive) {
-                                    BlurSnackBar.show(
-                                        context, '该轨已是主字幕，请先切换主字幕');
-                                    return;
-                                  }
-                                  videoState.setSecondarySubtitleTrack(
-                                      isSecondaryTrack
-                                          ? null
-                                          : trackIdFromMetadata);
-                                  BlurSnackBar.show(
-                                      context,
-                                      isSecondaryTrack
-                                          ? '已取消第二字幕轨'
-                                          : '已设为第二字幕轨（顶部同显）');
-                                },
-                              ),
                           ],
                         ),
                       ),
