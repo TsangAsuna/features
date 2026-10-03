@@ -37,6 +37,31 @@ import Photos
         ])
       }
 
+      let performanceChannel = FlutterMethodChannel(
+        name: "nipaplay/performance",
+        binaryMessenger: controller.binaryMessenger
+      )
+
+      performanceChannel.setMethodCallHandler { call, result in
+        guard call.method == "getThermalState" else {
+          result(FlutterMethodNotImplemented)
+          return
+        }
+
+        switch ProcessInfo.processInfo.thermalState {
+        case .nominal:
+          result("nominal")
+        case .fair:
+          result("fair")
+        case .serious:
+          result("serious")
+        case .critical:
+          result("critical")
+        @unknown default:
+          result("unknown")
+        }
+      }
+
       let channel = FlutterMethodChannel(
         name: "nipaplay/system_share",
         binaryMessenger: controller.binaryMessenger
