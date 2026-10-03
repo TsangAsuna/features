@@ -210,7 +210,7 @@ void main() {
     expect(find.textContaining('中文翻译行'), findsNWidgets(2)); // 描边层+填充层
   });
 
-  testWidgets('external kernel ASS keeps script layout: no slider leaks',
+  testWidgets('external kernel ASS: slider maps to MarginV, styles stay script',
       (tester) async {
     final delegate = _FakeMediaKitDelegate();
     final videoState = await _buildVideoPlayerState(delegate);
@@ -225,18 +225,24 @@ void main() {
       'isManualSet': true,
     });
 
-    // 用户在整块模式/内嵌轨上调过的滑块不得泄漏进外挂 ASS 内核渲染：
-    // sub-pos 复位底部、override 固定 no（否则 libass 逐行插值收拢，
-    // 双语两行挤在一起、字号被改写）。
+    // 默认位置（100）：无任何偏移 → 纯脚本样式（override=no、force-style
+    // 空、sub-pos 复位默认）。sub-pos 不得跟随滑块——其逐行插值会把双语
+    // 两行挤在一起。
+    await videoState.applySubtitleStylePreference();
+    expect(delegate.writtenProperties['sub-pos'], '100');
+    expect(delegate.writtenProperties['sub-ass-force-style'], '');
+    expect(delegate.writtenProperties['sub-ass-override'], 'no');
+
+    // 位置 50：位移改走 force-style MarginV 线性平移（PlayResY≈视频高度
+    // 1080 兜底 → 50% = 540），override 升 yes 让位移/大小滑块生效，
+    // \pos 定位的彩色注解与脚本配色不受影响。
     await videoState.setSubtitlePosition(50);
     await videoState.applySubtitleStylePreference();
-    expect(delegate.writtenProperties['sub-pos'], '100',
-        reason: '外挂 ASS 激活时 sub-pos 必须复位默认（视频底部）');
-    expect(delegate.writtenProperties['sub-ass-override'], 'no');
-    expect(delegate.writtenProperties['sub-ass-force-style'], '');
+    expect(delegate.writtenProperties['sub-pos'], '100');
+    expect(delegate.writtenProperties['sub-ass-force-style'], 'MarginV=540');
+    expect(delegate.writtenProperties['sub-ass-override'], 'yes');
 
-    // 取消外挂（切回内嵌轨）后恢复滑块语义：位置跟随滑块，
-    // 偏离默认时 auto 模式的 override 升级规则照常生效。
+    // 取消外挂（切回内嵌轨）后恢复滑块语义：位置跟随滑块（sub-pos）。
     videoState.setExternalSubtitle('');
     await videoState.applySubtitleStylePreference();
     expect(delegate.writtenProperties['sub-pos'], '50');

@@ -2540,20 +2540,44 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       if (playerKernelName != 'Media Kit' && playerKernelName != 'MDK') {
               return;
             }
-      // 外挂 ASS/SSA 内核轨（libmpv）由脚本主导布局：全局样式滑块（位置/
-      // 大小/边距）不参与——sub-pos 偏离默认时 libass 对多行/多事件做逐行
-      // 插值，双语两行会收拢挤在一起；sub-ass-override 升级会改写脚本字
-      // 号。这里复位 sub-pos、固定 override=no 并清空 force-style，防止内
-      // 嵌轨/整块模式的写入残留到本轨（用户感知：关掉整块移动后字幕悬在
-      // 半空、两行挤在一起，需要重调滑块）。时轴延迟照常下发。
+      // 外挂 ASS/SSA 内核轨（libmpv）：颜色/描边/粗斜体等样式字段保持脚本
+      // 主导（force-style 不下发颜色类字段），但位置/大小滑块必须保留可用
+      // 通道——sub-pos 一偏离默认，libass 就对多行/多事件逐行插值（双语两
+      // 行收拢挤在一起），且 override=no 时被内核整体忽略（滑块失效）。改
+      // 用 force-style 的 MarginV/MarginL/R 做线性平移：双语两行同值移动、
+      // libass 碰撞堆叠的行距不变，\pos 定位的彩色注解完全不受影响；
+      // sub-scale（大小滑块）在 override=yes 时同样线性生效。MarginV 按
+      // PlayResY≈视频高度估算，老压制（小 PlayRes）位移会放大，与水平
+      // 边距滑块的既有语义一致。时轴延迟照常下发。
       if (playerKernelName == 'Media Kit' &&
           isKernelRenderedExternalAssActive) {
         player.setProperty(
           'sub-pos',
           VideoPlayerState.defaultSubtitlePosition.toStringAsFixed(0),
         );
-        player.setProperty('sub-ass-force-style', '');
-        player.setProperty('sub-ass-override', 'no');
+        final effectivePos =
+            (_subtitlePosition - _subtitleMarginY * 0.1).clamp(0.0, 100.0);
+        final marginV = ((VideoPlayerState.defaultSubtitlePosition -
+                    effectivePos) /
+                100.0 *
+                _estimateExternalAssPlayResY())
+            .round();
+        final marginXDeviates = _subtitleMarginX.abs() >= 0.5;
+        final styleParts = <String>[
+          if (marginV != 0) 'MarginV=$marginV',
+          if (marginXDeviates)
+            (_subtitleAlignX == SubtitleAlignX.right
+                ? 'MarginR=${_subtitleMarginX.round()}'
+                : 'MarginL=${_subtitleMarginX.round()}'),
+        ];
+        player.setProperty('sub-ass-force-style', styleParts.join(','));
+        final positionalDeviates = marginV != 0 || marginXDeviates;
+        final scaleDeviates = (_subtitleScale - 1.0).abs() >= 0.001;
+        player.setProperty(
+          'sub-ass-override',
+          positionalDeviates || scaleDeviates ? 'yes' : 'no',
+        );
+        player.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
         player.setProperty('sub-delay', subtitleDelaySeconds.toStringAsFixed(2));
         return;
       }
@@ -2767,6 +2791,20 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
     } catch (e) {
       debugPrint('[VideoPlayerState] 设置字幕样式失败: $e');
     }
+  }
+
+  /// 外挂 ASS 的 MarginV 折算基准：PlayResY ≈ 视频高度（现代压制成立；
+  /// 老压制 PlayRes 384/640 时位移按比例放大，与其他滑块语义一致）。
+  /// 取不到视频高度时按 1080 兜底。
+  int _estimateExternalAssPlayResY() {
+    try {
+      final video = player.mediaInfo.video;
+      if (video != null && video.isNotEmpty) {
+        final height = video.first.codec.height;
+        if (height > 0) return height;
+      }
+    } catch (_) {}
+    return 1080;
   }
 
   // 加载弹幕轨道显示区域
