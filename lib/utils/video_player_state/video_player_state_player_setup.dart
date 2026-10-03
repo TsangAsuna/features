@@ -956,6 +956,9 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
               if (isCurrentPlayback()) {
                 _subtitleManager.updateAllSubtitleTracksInfo();
                 _subtitleManager.onSubtitleTrackChanged();
+                // Emby 内嵌/外挂选择变化可能改变内核 sid 归属，
+                // 整块移动模式的 sub-visibility 重同步。
+                applyEmbeddedSubtitleOverlayKernelState();
               }
             },
           );
@@ -1360,6 +1363,11 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
   void _onExternalSubtitleAutoLoaded(String path, String fileName) {
     // 这里可以处理回调，例如显示提示或更新UI
     debugPrint('VideoPlayerState: 外部字幕自动加载: $fileName');
+    // 自动加载在 SubtitleManager 内部激活（不经
+    // VideoPlayerState.setExternalSubtitle）。若激活的是内核轨外挂 ASS，
+    // 整块移动模式的 sub-visibility 必须重新同步让位 libass 样式渲染。
+    applyEmbeddedSubtitleOverlayKernelState();
+    _notifyListeners();
   }
 
   // 预先计算视频哈希值

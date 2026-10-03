@@ -965,6 +965,20 @@ class SubtitleManager extends ChangeNotifier {
   bool externalSubtitleRenderedInApp(String path) =>
       _shouldRenderExternalSubtitleInApp(path);
 
+  /// 当前激活的外挂字幕是否为内核轨 ASS/SSA（libmpv 下由 libass 按脚本
+  /// 样式渲染：\pos 定位、彩色注解、卡拉OK等）。
+  ///
+  /// 「内嵌字幕整块移动模式」必须为它让位——sub-visibility=no 会关掉
+  /// libass 渲染，sub-text 只能取到纯文本，ASS 的定位与配色全部丢失
+  /// （实测：外挂 ASS 里书上彩色小字注解整批变成白色居中纯文本）。
+  bool isKernelRenderedExternalAssActive() {
+    final path = getActiveExternalSubtitlePath();
+    if (path == null || path.isEmpty) return false;
+    if (_shouldRenderExternalSubtitleInApp(path)) return false;
+    final ext = p.extension(path).toLowerCase();
+    return ext == '.ass' || ext == '.ssa';
+  }
+
   bool shouldRenderCurrentExternalSubtitleInApp() {
     // 多字幕分块渲染：以激活路径集合为准——取消其中一条不能让
     // 其他仍在叠加的字幕块跟着消失（旧实现读单条当前路径）。

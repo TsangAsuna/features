@@ -620,9 +620,8 @@ class _SubtitleSettingsMenuState extends State<SubtitleSettingsMenu> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '开启后内嵌字幕改由界面整块渲染：位置/水平边距移动整个字幕块，'
-                  '双语行距固定不重叠；字幕样式跟随下方全局设置，ASS 特效不再生效。'
-                  '双语行序自动修正为汉化在上、原文在下',
+                  '内嵌字幕整块渲染：双语行距固定不重叠，样式跟随全局设置'
+                  '（ASS 特效失效）；外挂 ASS 保留自带样式',
                   locale: const Locale('zh', 'CN'),
                   style: TextStyle(
                     color: menuColors.foreground.withValues(alpha: 0.55),

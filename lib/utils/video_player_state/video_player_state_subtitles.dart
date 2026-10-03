@@ -193,6 +193,9 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   /// 或非 Media Kit/MDK 内核时 applySubtitleStylePreference 内部直接返回。
   void _reapplyKernelSubtitleStyleAfterSelectionChange() {
     if (kIsWeb || _isDisposed) return;
+    // 外挂激活状态变化会改变内核 sid 的归属（内嵌轨 ↔ 外挂 ASS 轨），
+    // 整块移动模式的 sub-visibility 需随之重同步（幂等）。
+    applyEmbeddedSubtitleOverlayKernelState();
     unawaited(applySubtitleStylePreference());
   }
 
@@ -300,7 +303,16 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   /// 是否开启整块移动模式。开启后内核只解码不渲染，App 按 sub-text
   /// 整块渲染内嵌字幕：位置滑块移动整个字幕块（双语行距永不随插值
   /// 收拢），水平边距按屏幕像素生效（PlayRes 无关）。
+  ///
+  /// 例外：激活的是内核轨外挂 ASS/SSA 时整块模式让位（见
+  /// [isKernelRenderedExternalAssActive]），libass 按脚本样式渲染。
   bool get embeddedSubtitleOverlayMode => _embeddedSubtitleOverlayMode;
+
+  /// 当前激活的外挂字幕是否为内核轨 ASS/SSA。整块移动模式只服务内嵌轨
+  /// ——外挂 ASS 的定位/配色由 libass 按脚本渲染，sub-visibility=no +
+  /// sub-text 纯文本块会把它压成白色居中纯文本，必须为它让位。
+  bool get isKernelRenderedExternalAssActive =>
+      _subtitleManager.isKernelRenderedExternalAssActive();
 
   Future<void> setEmbeddedSubtitleOverlayMode(bool enabled) async {
     if (_embeddedSubtitleOverlayMode == enabled) return;
@@ -308,6 +320,10 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_embeddedSubtitleOverlayModeKey, enabled);
     applyEmbeddedSubtitleOverlayKernelState();
+    // 开关切换会改变字幕由谁渲染（内核/App），样式偏好（含 sub-pos）必须
+    // 按当前激活轨重新下发：整块模式下调过的位置不能泄漏进内核渲染
+    // （外挂 ASS 场景：关掉后字幕悬在半空、双语两行收拢挤在一起）。
+    unawaited(applySubtitleStylePreference());
     _notifyListeners();
   }
 
@@ -346,12 +362,15 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
 
   /// 按当前模式同步内核渲染开关。在模式切换、视频打开、内核热切换后
   /// 调用；幂等。Media Kit 内核 + 模式开启 → sub-visibility=no（内核只
-  /// 解码不渲染）；否则恢复 yes（含模式关闭和内核切换回其它内核）。
+  /// 解码不渲染）；否则恢复 yes（含模式关闭、内核切换回其它内核，以及
+  /// 激活了内核轨外挂 ASS/SSA 的情况——外挂 ASS 样式由 libass 脚本主导，
+  /// 整块模式不得压平它）。
   void applyEmbeddedSubtitleOverlayKernelState() {
     if (kIsWeb || _isDisposed) return;
     try {
       if (player.getPlayerKernelName() == 'Media Kit' &&
-          _embeddedSubtitleOverlayMode) {
+          _embeddedSubtitleOverlayMode &&
+          !isKernelRenderedExternalAssActive) {
         player.setProperty('sub-visibility', 'no');
       } else {
         player.setProperty('sub-visibility', 'yes');
@@ -387,6 +406,15 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
 
   Future<void> _pollEmbeddedSubtitleOverlayText() async {
     try {
+      // 外挂 ASS 激活期间整块文本不参与渲染（保留 libass 样式），
+      // 切换前的残留文本必须清掉，否则会盖在 libass 渲染的 ASS 上。
+      if (isKernelRenderedExternalAssActive) {
+        if (_embeddedSubtitleOverlayText.isNotEmpty) {
+          _embeddedSubtitleOverlayText = '';
+          _notifyListeners();
+        }
+        return;
+      }
       final text = await player.getLiveProperty('sub-text') ?? '';
       if (_isDisposed) return;
       final trimmed = text.trim();

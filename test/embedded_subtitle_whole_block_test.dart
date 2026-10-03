@@ -34,13 +34,29 @@ class _FakeMediaKitDelegate extends Fake implements MediaKitPlayerAdapter {
   Future<String?> getLiveProperty(String name) async {
     return liveProperties[name];
   }
+
+  // 外挂字幕选择/清除路径会触达这三个成员（守卫先于短路求值），
+  // 未实现会让 setExternalSubtitle 整体中断、状态清不掉。
+  @override
+  bool get supportsExternalSubtitles => true;
+
+  @override
+  List<int> get activeSubtitleTracks => const [];
+
+  @override
+  void setMedia(String path, PlayerMediaType type) {}
 }
 
 Future<VideoPlayerState> _buildVideoPlayerState(
     AbstractPlayer delegate) async {
   SharedPreferences.setMockInitialValues(<String, Object>{});
   final videoState = VideoPlayerState();
-  videoState.player = Player.withDelegate(delegate);
+  final player = Player.withDelegate(delegate);
+  videoState.player = player;
+  // 生产环境由 player_kernel_manager 在内核切换时同步给各 manager；
+  // 测试里必须手动同步，否则 SubtitleManager 仍持有未物化的懒委托
+  // （内核名"未知"，外挂 ASS 的内核轨判定会失效）。
+  videoState.subtitleManager.updatePlayer(player);
   return videoState;
 }
 
@@ -134,6 +150,97 @@ void main() {
       reason: '关闭整块模式必须恢复内核渲染',
     );
     expect(videoState.embeddedSubtitleOverlayText, isEmpty);
+  });
+
+  testWidgets('whole-block mode steps aside for kernel-rendered external ASS',
+      (tester) async {
+    final delegate = _FakeMediaKitDelegate(liveProperties: {
+      'sub-text': '中文翻译行\n日本語原文行',
+    });
+    final videoState = await _buildVideoPlayerState(delegate);
+
+    // 注入激活中的内核轨外挂 ASS：直接写轨道信息，不经文件系统/内核加载。
+    const assPath = 'Z:/sample.chs.ass';
+    videoState.setCurrentExternalSubtitlePath(assPath);
+    videoState.updateDanmakuTrackInfo('external_subtitle', <String, dynamic>{
+      'path': assPath,
+      'title': '外挂ASS',
+      'isActive': true,
+      'isManualSet': true,
+    });
+    expect(videoState.isKernelRenderedExternalAssActive, isTrue);
+
+    await videoState.setEmbeddedSubtitleOverlayMode(true);
+    expect(
+      delegate.writtenProperties['sub-visibility'],
+      isNot('no'),
+      reason: '外挂 ASS 必须保留 libass 脚本样式渲染，不得关 sub-visibility',
+    );
+
+    // 整块纯文本块必须整层退位：否则 \pos 定位/彩色注解被压成白色居中
+    // 纯文本（实测 Medalist 第1集书上的小字翻译全部丢失样式）。
+    videoState.debugSetEmbeddedSubtitleOverlayText('中文翻译行\n日本語原文行');
+    await tester.pumpWidget(_wrap(
+      const SizedBox(
+        width: 800,
+        height: 600,
+        child: EmbeddedSubtitleOverlay(),
+      ),
+      videoState,
+    ));
+    await tester.pump();
+    expect(find.textContaining('中文翻译行'), findsNothing);
+
+    // 轮询在外挂 ASS 激活期间不再填充整块文本，并清掉切换前残留。
+    videoState.pollEmbeddedSubtitleOverlayText();
+    await tester.pump();
+    await tester.pump();
+    expect(videoState.embeddedSubtitleOverlayText, isEmpty);
+
+    // 取消外挂（切回内嵌轨）后，整块模式恢复接管：sub-visibility=no、
+    // 纯文本块重新上屏。
+    videoState.setExternalSubtitle('');
+    expect(
+      delegate.writtenProperties['sub-visibility'],
+      'no',
+      reason: '外挂取消后整块模式应恢复内核只解码不渲染',
+    );
+    videoState.debugSetEmbeddedSubtitleOverlayText('中文翻译行\n日本語原文行');
+    await tester.pump();
+    expect(find.textContaining('中文翻译行'), findsNWidgets(2)); // 描边层+填充层
+  });
+
+  testWidgets('external kernel ASS keeps script layout: no slider leaks',
+      (tester) async {
+    final delegate = _FakeMediaKitDelegate();
+    final videoState = await _buildVideoPlayerState(delegate);
+
+    // 注入激活中的内核轨外挂 ASS（不经文件系统/内核加载）。
+    const assPath = 'Z:/sample.chs.ass';
+    videoState.setCurrentExternalSubtitlePath(assPath);
+    videoState.updateDanmakuTrackInfo('external_subtitle', <String, dynamic>{
+      'path': assPath,
+      'title': '外挂ASS',
+      'isActive': true,
+      'isManualSet': true,
+    });
+
+    // 用户在整块模式/内嵌轨上调过的滑块不得泄漏进外挂 ASS 内核渲染：
+    // sub-pos 复位底部、override 固定 no（否则 libass 逐行插值收拢，
+    // 双语两行挤在一起、字号被改写）。
+    await videoState.setSubtitlePosition(50);
+    await videoState.applySubtitleStylePreference();
+    expect(delegate.writtenProperties['sub-pos'], '100',
+        reason: '外挂 ASS 激活时 sub-pos 必须复位默认（视频底部）');
+    expect(delegate.writtenProperties['sub-ass-override'], 'no');
+    expect(delegate.writtenProperties['sub-ass-force-style'], '');
+
+    // 取消外挂（切回内嵌轨）后恢复滑块语义：位置跟随滑块，
+    // 偏离默认时 auto 模式的 override 升级规则照常生效。
+    videoState.setExternalSubtitle('');
+    await videoState.applySubtitleStylePreference();
+    expect(delegate.writtenProperties['sub-pos'], '50');
+    expect(delegate.writtenProperties['sub-ass-override'], 'yes');
   });
 
   testWidgets('bilingual line order auto-corrects: translation above, original below',

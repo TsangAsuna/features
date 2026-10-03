@@ -19,6 +19,11 @@ class EmbeddedSubtitleOverlay extends StatelessWidget {
         if (!videoState.embeddedSubtitleOverlayMode) {
           return const SizedBox.shrink();
         }
+        if (videoState.isKernelRenderedExternalAssActive) {
+          // 外挂 ASS 由内核 libass 按脚本样式渲染（\pos 定位/彩色注解），
+          // sub-text 纯文本块会把它压成白色居中文字，必须整层退位。
+          return const SizedBox.shrink();
+        }
         if (videoState.shouldHideSubtitlesForScreenshot) {
           // 截图「隐藏字幕」：仅在截图帧合成期间隐藏，不影响观看。
           return const SizedBox.shrink();

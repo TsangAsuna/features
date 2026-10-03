@@ -1248,32 +1248,42 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                                 .isDfmStartupGatePending) &&
                                         videoState.danmakuVisible)
                                       Positioned.fill(
-                                        child: IgnorePointer(
-                                          ignoring: true,
-                                          child: Consumer<VideoPlayerState>(
-                                            builder: (context, videoState, _) {
-                                              return _buildDanmakuOverlay(
-                                                videoState,
-                                              );
-                                            },
+                                        // RepaintBoundary 隔离弹幕层：同 Stack
+                                        // 的字幕叠层重绘不得把弹幕拖进重新
+                                        // 合成（弹幕闪烁，同 SRT 编辑框根因）。
+                                        child: RepaintBoundary(
+                                          child: IgnorePointer(
+                                            ignoring: true,
+                                            child: Consumer<VideoPlayerState>(
+                                              builder:
+                                                  (context, videoState, _) {
+                                                return _buildDanmakuOverlay(
+                                                  videoState,
+                                                );
+                                              },
+                                            ),
                                           ),
                                         ),
                                       ),
                                     if (videoState.hasVideo)
                                       Positioned.fill(
-                                        child: Consumer<VideoPlayerState>(
-                                          builder: (context, videoState, _) {
-                                            return ValueListenableBuilder<
-                                                double>(
-                                              valueListenable:
-                                                  videoState.playbackTimeMs,
-                                              builder: (context, posMs, __) {
-                                                return ExternalSubtitleOverlay(
-                                                  currentPositionMs: posMs,
-                                                );
-                                              },
-                                            );
-                                          },
+                                        // RepaintBoundary：SRT 叠层逐帧取文本
+                                        // 重绘，隔离后不连带弹幕层重合成。
+                                        child: RepaintBoundary(
+                                          child: Consumer<VideoPlayerState>(
+                                            builder: (context, videoState, _) {
+                                              return ValueListenableBuilder<
+                                                  double>(
+                                                valueListenable:
+                                                    videoState.playbackTimeMs,
+                                                builder: (context, posMs, __) {
+                                                  return ExternalSubtitleOverlay(
+                                                    currentPositionMs: posMs,
+                                                  );
+                                                },
+                                              );
+                                            },
+                                          ),
                                         ),
                                       ),
                                     // 内嵌字幕整块移动模式：sub-text 驱动的
@@ -1282,7 +1292,9 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                       const Positioned.fill(
                                         child: IgnorePointer(
                                           ignoring: true,
-                                          child: EmbeddedSubtitleOverlay(),
+                                          child: RepaintBoundary(
+                                            child: EmbeddedSubtitleOverlay(),
+                                          ),
                                         ),
                                       ),
                                     if (videoState.status ==
@@ -1345,33 +1357,40 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                                   .isDfmStartupGatePending) &&
                                           videoState.danmakuVisible)
                                         Positioned.fill(
-                                          child: IgnorePointer(
-                                            ignoring: true,
-                                            child: Consumer<VideoPlayerState>(
-                                              builder:
-                                                  (context, videoState, _) {
-                                                return _buildDanmakuOverlay(
-                                                  videoState,
-                                                );
-                                              },
+                                          // 同上：弹幕层 RepaintBoundary 隔离。
+                                          child: RepaintBoundary(
+                                            child: IgnorePointer(
+                                              ignoring: true,
+                                              child: Consumer<VideoPlayerState>(
+                                                builder:
+                                                    (context, videoState, _) {
+                                                  return _buildDanmakuOverlay(
+                                                    videoState,
+                                                  );
+                                                },
+                                              ),
                                             ),
                                           ),
                                         ),
                                       if (videoState.hasVideo)
                                         Positioned.fill(
-                                          child: Consumer<VideoPlayerState>(
-                                            builder: (context, videoState, _) {
-                                              return ValueListenableBuilder<
-                                                  double>(
-                                                valueListenable:
-                                                    videoState.playbackTimeMs,
-                                                builder: (context, posMs, __) {
-                                                  return ExternalSubtitleOverlay(
-                                                    currentPositionMs: posMs,
-                                                  );
-                                                },
-                                              );
-                                            },
+                                          // 同上：SRT 叠层 RepaintBoundary 隔离。
+                                          child: RepaintBoundary(
+                                            child: Consumer<VideoPlayerState>(
+                                              builder:
+                                                  (context, videoState, _) {
+                                                return ValueListenableBuilder<
+                                                    double>(
+                                                  valueListenable:
+                                                      videoState.playbackTimeMs,
+                                                  builder: (context, posMs, __) {
+                                                    return ExternalSubtitleOverlay(
+                                                      currentPositionMs: posMs,
+                                                    );
+                                                  },
+                                                );
+                                              },
+                                            ),
                                           ),
                                         ),
                                       // 内嵌字幕整块移动模式（第二处布局分支）
@@ -1379,7 +1398,9 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
                                         const Positioned.fill(
                                           child: IgnorePointer(
                                             ignoring: true,
-                                            child: EmbeddedSubtitleOverlay(),
+                                            child: RepaintBoundary(
+                                              child: EmbeddedSubtitleOverlay(),
+                                            ),
                                           ),
                                         ),
                                       if (videoState.status ==

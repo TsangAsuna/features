@@ -278,6 +278,11 @@ extension VideoPlayerStateStreaming on VideoPlayerState {
           subtitlePath,
           isManualSetting: false,
         );
+        // 外挂激活可能改变内核 sid 归属，整块模式的 sub-visibility 重同步。
+        if (isCurrentPlayback()) {
+          applyEmbeddedSubtitleOverlayKernelState();
+          _notifyListeners();
+        }
       },
       followDefault: () async {
         if (isCurrentPlayback()) {
@@ -328,11 +333,17 @@ extension VideoPlayerStateStreaming on VideoPlayerState {
             activePath: activePath,
           );
         },
-        activate: (subtitlePath, _) =>
-            _subtitleManager.activateEmbyExternalSubtitle(
-          subtitlePath,
-          isManualSetting: false,
-        ),
+        activate: (subtitlePath, _) async {
+          await _subtitleManager.activateEmbyExternalSubtitle(
+            subtitlePath,
+            isManualSetting: false,
+          );
+          // 外挂激活可能改变内核 sid 归属，整块模式的 sub-visibility 重同步。
+          if (isCurrentPlayback()) {
+            applyEmbeddedSubtitleOverlayKernelState();
+            _notifyListeners();
+          }
+        },
         isCurrent: isCurrentPlayback,
       );
     } catch (e) {

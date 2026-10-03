@@ -2540,8 +2540,25 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       if (playerKernelName != 'Media Kit' && playerKernelName != 'MDK') {
               return;
             }
+      // 外挂 ASS/SSA 内核轨（libmpv）由脚本主导布局：全局样式滑块（位置/
+      // 大小/边距）不参与——sub-pos 偏离默认时 libass 对多行/多事件做逐行
+      // 插值，双语两行会收拢挤在一起；sub-ass-override 升级会改写脚本字
+      // 号。这里复位 sub-pos、固定 override=no 并清空 force-style，防止内
+      // 嵌轨/整块模式的写入残留到本轨（用户感知：关掉整块移动后字幕悬在
+      // 半空、两行挤在一起，需要重调滑块）。时轴延迟照常下发。
+      if (playerKernelName == 'Media Kit' &&
+          isKernelRenderedExternalAssActive) {
+        player.setProperty(
+          'sub-pos',
+          VideoPlayerState.defaultSubtitlePosition.toStringAsFixed(0),
+        );
+        player.setProperty('sub-ass-force-style', '');
+        player.setProperty('sub-ass-override', 'no');
+        player.setProperty('sub-delay', subtitleDelaySeconds.toStringAsFixed(2));
+        return;
+      }
             // mdk 属性名是 subtitle.scale（sub-scale 是 mpv 的）——之前用错
-                  // 导致 mdk 内嵌轨字号设置不生效（默认 22 小字号，对比 libmpv 明显小）
+            // 导致 mdk 内嵌轨字号设置不生效（默认 22 小字号，对比 libmpv 明显小）
                   player.setProperty(
                     playerKernelName == 'MDK' ? 'subtitle.scale' : 'sub-scale',
                     _subtitleScale.toStringAsFixed(2),
