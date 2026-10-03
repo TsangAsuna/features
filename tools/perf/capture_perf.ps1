@@ -1,4 +1,4 @@
-# External-side performance sampler for the NipaPlay pre-delivery evaluation
+﻿# External-side performance sampler for the NipaPlay pre-delivery evaluation
 # rig (see tools/perf/README.md). Samples OS-level metrics for the player
 # process and appends one JSON line per process per sample: CPU%, working
 # set, private bytes, per-engine GPU utilization (3D / videodecode / ...) and

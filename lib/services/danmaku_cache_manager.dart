@@ -172,7 +172,6 @@ class DanmakuCacheManager {
     if (kIsWeb) return;
     try {
       // 清理文件缓存
-      final now = DateTime.now();
       final directory = await _getDanmakuCacheDirectory();
       final files = await directory
           .list()

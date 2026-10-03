@@ -22,7 +22,9 @@ class EvalScenarios {
       return _env('NIPAPLAY_EVAL_SUBTITLE') != null ||
           _intEnv('NIPAPLAY_EVAL_SYNTH_DANMAKU') > 0 ||
           _intEnv('NIPAPLAY_EVAL_DANMAKU_OFF_AT') > 0 ||
-          _intEnv('NIPAPLAY_EVAL_DANMAKU_ON_AT') > 0;
+          _intEnv('NIPAPLAY_EVAL_DANMAKU_ON_AT') > 0 ||
+          _env('NIPAPLAY_EVAL_SEEK_ZERO') != null ||
+          _env('NIPAPLAY_EVAL_DECODERS') != null;
     } catch (_) {
       return false;
     }
@@ -42,6 +44,12 @@ class EvalScenarios {
   static bool _danmakuInjected = false;
   static bool _danmakuTurnedOff = false;
   static bool _danmakuTurnedOn = false;
+  static bool _seekedToZero = false;
+  static bool _sawResumeJump = false;
+  static int _prevPosSec = 0;
+  static int _ticksSinceSeek = 2; // 首个跳变即刻允许 seek
+  static int _seekAttempts = 0;
+  static bool _visibilityNormalized = false;
 
   static void start(VideoPlayerState vs) {
     if (!enabled || _timer != null) return;
@@ -49,7 +57,8 @@ class EvalScenarios {
         'subtitle=${_env('NIPAPLAY_EVAL_SUBTITLE')} '
         'danmaku=${_intEnv('NIPAPLAY_EVAL_SYNTH_DANMAKU')} '
         'offAt=${_intEnv('NIPAPLAY_EVAL_DANMAKU_OFF_AT')} '
-        'onAt=${_intEnv('NIPAPLAY_EVAL_DANMAKU_ON_AT')}');
+        'onAt=${_intEnv('NIPAPLAY_EVAL_DANMAKU_ON_AT')} '
+        'seekZero=${_env('NIPAPLAY_EVAL_SEEK_ZERO') != null}');
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick(vs));
   }
 
@@ -64,6 +73,56 @@ class EvalScenarios {
       return;
     }
     try {
+      // 可见性归一：上一轮 run 的开关弹幕会持久化到 prefs，污染本轮 A/B。
+      // 除"仅 ON_AT"场景外一律先强制可见，再按 OFF_AT 模拟用户关闭。
+      if (!_visibilityNormalized) {
+        _visibilityNormalized = true;
+        final offAt = _intEnv('NIPAPLAY_EVAL_DANMAKU_OFF_AT');
+        final onAt = _intEnv('NIPAPLAY_EVAL_DANMAKU_ON_AT');
+        // 仅 ON_AT：先隐藏，到点再开（测"重开重建"路径）。
+        if (offAt == 0 && onAt > 0) {
+          if (!vs.danmakuVisible) {
+            debugPrint('[EvalScenarios] 归一：强制隐藏（测重开路径）');
+            vs.setDanmakuVisible(false);
+          }
+        } else if (!vs.danmakuVisible) {
+          debugPrint('[EvalScenarios] 归一：强制可见（覆盖持久化的隐藏态）');
+          vs.setDanmakuVisible(true);
+        }
+      }
+
+      // 自动续播会让每次 run 从上次中断处开始，破坏 A/B 可比性。
+      // 归零策略：检测"位置跳变"（续播恢复的特征，如 0→170s）后循环
+      // seek(0) 直到位置真正落到 5s 以内且保持；无跳变视为正常从头播放，
+      // 不干预。加载完成前的 seek 会被恢复逻辑覆盖，因此必须重试。
+      if (_env('NIPAPLAY_EVAL_SEEK_ZERO') != null && !_seekedToZero) {
+        final posSec = vs.position.inSeconds;
+        if (posSec - _prevPosSec > 20) {
+          _sawResumeJump = true;
+        }
+        _prevPosSec = posSec;
+        if (_sawResumeJump) {
+          if (posSec < 5) {
+            _seekedToZero = true;
+            debugPrint('[EvalScenarios] 归零确认');
+          } else if (_ticksSinceSeek >= 2) {
+            debugPrint('[EvalScenarios] 归零 seek（覆盖自动续播 ${posSec}s）');
+            vs.seekTo(Duration.zero);
+            _ticksSinceSeek = 0;
+            _seekAttempts++;
+            if (_seekAttempts > 15) {
+              debugPrint('[EvalScenarios] 归零重试超限，放弃干预');
+              _seekedToZero = true;
+            }
+          } else {
+            _ticksSinceSeek++;
+          }
+        } else if (posSec >= 5) {
+          // 全程无跳变：本来就从 0 开始的正常播放。
+          _seekedToZero = true;
+        }
+      }
+
       final subtitlePath = _env('NIPAPLAY_EVAL_SUBTITLE');
       if (!_subtitleAttached &&
           subtitlePath != null &&

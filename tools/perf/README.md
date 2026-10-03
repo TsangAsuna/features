@@ -40,19 +40,51 @@
 
 ## 首次基线（2026-10-02，本机 GTX 1060 3GB / Win10 19045，1080p60 H.264 fixture，45s 采样）
 
-| 指标 | mediaKit（dxva2-copy 硬解） | MDK（本机为软解） |
+| 指标 | mediaKit（d3d11va-copy 硬解） | MDK（本机为软解） |
 | --- | --- | --- |
-| CPU 均值 / p95 | 10.1% / 22.4% | 22.3% / 28.4% |
-| GPU VideoDecode | 4.3%（p95 10.9%） | **0%** |
-| GPU 3D | 28.5%（p95 47.2%） | 30.2% |
-| 专用显存峰值 | 1141 MB | 894 MB |
-| 工作集峰值 | 1215 MB | 1201 MB |
+| CPU 均值 / p95 | 19.7% / — | 16.6% / — |
+| GPU VideoDecode | 9.7% | **0%** |
+| 专用显存峰值 | 516 MB | 325 MB |
+| 工作集均值 / 峰值 | 502 / 522 MB | 435 / 447 MB |
 
-**已知发现（记录于首次交付评估）**：MDK（fvp）内核在本机 Windows 上 1080p60
-H.264 走软解（VideoDecode 引擎 0%、CPU 约为 mediaKit 硬解的 2 倍）；MDK 的
-`getDetailedMediaInfo` 不暴露 mpv 式属性，`hwdec` 一栏对 MDK 判空，判定以
-GPU `VideoDecode` 引擎利用率为准。若后续 MDK 交付前评估出现 VideoDecode>0
-且 CPU 显著下降，说明硬解路径已打通。
+（10min fixture、归零 seek、全程播放的干净数据；MDK 软解下 CPU 反而与
+mediaKit 硬解相近，因为 d3d11va-copy 的拷贝开销抵消了硬解收益。）
+
+## 内存评估结论（2026-10-02 优化会话）
+
+1. **渲染路径双态是最大变量**：同一二进制、同一场景，不同启动之间工作集
+   在 ~430MB（shared 显存 20-27MB）与 ~1.1-1.2GB（shared 显存 620-708MB）
+   之间摆动。共享显存由系统 RAM 支撑、直接计入 WS。本机有多块虚拟显示
+   适配器（Sunshine/Oray/MuMu），疑似 mpv D3D11 设备与 Flutter(ANGLE)
+   落在不同适配器时走跨适配器共享内存。**后续优化方向：渲染端 LUID/适配
+   器匹配**。单次 A/B 结论必须先看 `gpuShared` 是否同态。
+2. **MDK 硬解全线失效**（fvp 0.33.1 捆绑的 mdk-sdk）：MFT:d3d=11 / D3D11 /
+   DXVA 显式指定均静默回退 FFmpeg（`decoder.video` 属性证实），VideoDecode
+   引擎 0%。修复需查 fvp/mdk-sdk 侧（解码器注册或 D3D11 互操作），适配器
+   配置层无解。
+3. **开关弹幕内存几乎不变是正常的**：10k 条弹幕的数据量 ~15-20MB（轨道源
+   数据 + 显示层拷贝），释放后淹没在 WS 噪声（±30MB）里。组内实测关闭后
+   Δ−5MB（mediaKit）/ +1MB（MDK），对照漂移 ±12MB。真正会累积的是跨集
+   缓存（已修，见下），单次开关本来就没有大块内存。
+4. **已修复的驻留点**（本次优化代码）：
+   - `DanmakuCacheManager` 内存缓存层移除（原 `_rememberInMemoryCache`
+     自递归 bug 使其从未生效；磁盘缓存是唯一层，重读 <50ms）。
+   - 关弹幕即释放显示层 + controller 数据；Erika 内核同步
+     `clearNativeDanmaku()` 释放原生 JSON 缓冲。重开从轨道源数据重建，
+     无需网络/磁盘重读（`_updateMergedDanmakuList` 隐藏态守卫）。
+   - `DanmakuContainer` 补 dispose：GPU 渲染器独占的 2048px 字体图集
+     （ui.Image）此前从不释放，随 overlay 重建累积；含 create/dispose
+     异步竞态修复。
+   - `SubtitleManager`：移除/清空外挂字幕即逐出解析缓存（此前永不淘汰，
+     剧场版字幕解析后 0.5-2MB/份），并加 8 份 LRU 上限。
+5. **播完不释放**：播放到片尾后 WS 停在高位不回落（短 fixture 实验观察）。
+   长视频看完整部后的内存水位与播放中一致，属待优化项。
+
+## 已知发现（首次交付评估）
+
+MDK（fvp）内核在本机 Windows 上 1080p60 H.264 走软解（VideoDecode 引擎
+0%）；MDK 的 `getDetailedMediaInfo` 不暴露 mpv 式属性，`hwdec` 一栏对 MDK
+判空，判定以 GPU `VideoDecode` 引擎利用率为准。
 
 ## 交付门槛（本机基线 GTX 1060 3GB / Win10，按此解释数据）
 
@@ -78,6 +110,25 @@ GPU `VideoDecode` 引擎利用率为准。若后续 MDK 交付前评估出现 Vi
   覆盖用户设置，保证跨运行可比。（`PlayerFactory.initialize` 读取。）
 - `NIPAPLAY_AUTOPLAY_FILE=<视频路径>`：既有启动参数，`run_eval.ps1` 用命令行
   参数代替。
+- 场景钩子（`lib/dev/eval_scenarios.dart`，`run_eval.ps1` 对应参数自动传入）：
+  - `NIPAPLAY_EVAL_SEEK_ZERO=1`：覆盖自动续播，归零后播放（A/B 可比的前提；
+    run_eval.ps1 默认开启）。
+  - `NIPAPLAY_EVAL_SUBTITLE=<路径>`：播放开始后自动挂载外挂字幕。
+  - `NIPAPLAY_EVAL_SYNTH_DANMAKU=<条数>`：注入合成弹幕（铺满时间轴，贴近真实负载）。
+  - `NIPAPLAY_EVAL_DANMAKU_OFF_AT=<秒>` / `ON_AT=<秒>`：模拟用户开关弹幕。
+  - `NIPAPLAY_EVAL_DECODERS=D3D11,FFmpeg,...`：覆写解码器顺序（定位内核静默回退）。
+
+## 测量注意事项（踩过的坑）
+
+- **自动续播会毁掉 A/B**：app 会从上次中断处续播。90s 的短 fixture 在
+  "启动(5s)+settle(10s)+采样" 的时间线上会中途播完，之后采到的全是"片尾
+  挂机"状态（WS 高位不释放、vdec=0），数字完全失真。用 10min fixture
+  （`sample_1080p60_10min.mp4`）+ `NIPAPLAY_EVAL_SEEK_ZERO`。
+- **播完不释放是真实存在的行为**：短 fixture 实验里，播放到 89.9s 结束后
+  WS 停在 1.2GB 不回落——这也是内存优化要覆盖的场景（长视频看片尾）。
+- 本机 WMI `Win32_Perf*GPUPerformanceCounters` cooked 值恒 0，必须用
+  Get-Counter；全通配 `\GPU Engine(*)` 枚举约 4 秒，采样器已合并为单次
+  调用并按实际耗时归一化 CPU%（raw 行里的 `sampleSec` 可核查）。
 
 ## 本机构建注意事项（2026-10 记录）
 

@@ -1,4 +1,4 @@
-# Orchestrates one NipaPlay pre-delivery evaluation run (see tools/perf/README.md):
+﻿# Orchestrates one NipaPlay pre-delivery evaluation run (see tools/perf/README.md):
 # launches the built player with a fixture, samples system-side metrics, stops
 # the app, and writes run metadata. Analyze afterwards with:
 #   python tools/perf/analyze_perf.py <out-dir>
@@ -17,7 +17,8 @@ param(
   [string]$SubtitlePath = "",       # eval hook: auto-attach an external subtitle
   [int]$SynthDanmaku = 0,           # eval hook: inject N synthetic danmaku
   [int]$DanmakuOffAt = 0,           # eval hook: toggle danmaku off at N sec
-  [int]$DanmakuOnAt = 0             # eval hook: toggle danmaku back on at N sec
+  [int]$DanmakuOnAt = 0,            # eval hook: toggle danmaku back on at N sec
+  [string]$Decoders = ""            # eval hook: override MDK decoder order (NIPAPLAY_EVAL_DECODERS)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -61,6 +62,10 @@ if ($SubtitlePath) { $psi.EnvironmentVariables['NIPAPLAY_EVAL_SUBTITLE'] = [IO.P
 if ($SynthDanmaku -gt 0) { $psi.EnvironmentVariables['NIPAPLAY_EVAL_SYNTH_DANMAKU'] = "$SynthDanmaku" }
 if ($DanmakuOffAt -gt 0) { $psi.EnvironmentVariables['NIPAPLAY_EVAL_DANMAKU_OFF_AT'] = "$DanmakuOffAt" }
 if ($DanmakuOnAt -gt 0) { $psi.EnvironmentVariables['NIPAPLAY_EVAL_DANMAKU_ON_AT'] = "$DanmakuOnAt" }
+if ($Decoders) { $psi.EnvironmentVariables['NIPAPLAY_EVAL_DECODERS'] = $Decoders }
+# 评估 run 一律覆盖自动续播（否则每次从上次中断处开始，A/B 不可比）。
+$psi.EnvironmentVariables['NIPAPLAY_EVAL_SEEK_ZERO'] = '1'
+Write-Host ("  env check: SEEK_ZERO={0} PERF_LOG={1}" -f $psi.EnvironmentVariables['NIPAPLAY_EVAL_SEEK_ZERO'], $psi.EnvironmentVariables['NIPAPLAY_PERF_LOG'])
 
 Write-Host "launching $ExePath"
 Write-Host "  fixture: $Fixture"

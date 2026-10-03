@@ -1,4 +1,4 @@
-# Generates the evaluation fixtures used by run_eval.ps1. Deterministic
+﻿# Generates the evaluation fixtures used by run_eval.ps1. Deterministic
 # testsrc2 patterns keep runs comparable; H.264 High guarantees hardware
 # decode availability on any GPU from the last decade.
 #
