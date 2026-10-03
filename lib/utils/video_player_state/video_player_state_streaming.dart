@@ -278,9 +278,10 @@ extension VideoPlayerStateStreaming on VideoPlayerState {
           subtitlePath,
           isManualSetting: false,
         );
-        // 外挂激活可能改变内核 sid 归属，整块模式的 sub-visibility 重同步。
+        // 外挂激活可能改变内核 sid 归属：sub-visibility 与样式偏好
+        // （含外挂 ASS 的 MarginV 通道）按新激活轨重发。
         if (isCurrentPlayback()) {
-          applyEmbeddedSubtitleOverlayKernelState();
+          _reapplyKernelSubtitleStyleAfterSelectionChange();
           _notifyListeners();
         }
       },
@@ -338,9 +339,10 @@ extension VideoPlayerStateStreaming on VideoPlayerState {
             subtitlePath,
             isManualSetting: false,
           );
-          // 外挂激活可能改变内核 sid 归属，整块模式的 sub-visibility 重同步。
+          // 外挂激活可能改变内核 sid 归属：sub-visibility 与样式偏好
+          // （含外挂 ASS 的 MarginV 通道）按新激活轨重发。
           if (isCurrentPlayback()) {
-            applyEmbeddedSubtitleOverlayKernelState();
+            _reapplyKernelSubtitleStyleAfterSelectionChange();
             _notifyListeners();
           }
         },

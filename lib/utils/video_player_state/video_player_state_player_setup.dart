@@ -956,9 +956,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
               if (isCurrentPlayback()) {
                 _subtitleManager.updateAllSubtitleTracksInfo();
                 _subtitleManager.onSubtitleTrackChanged();
-                // Emby 内嵌/外挂选择变化可能改变内核 sid 归属，
-                // 整块移动模式的 sub-visibility 重同步。
-                applyEmbeddedSubtitleOverlayKernelState();
+                // Emby 内嵌/外挂选择变化可能改变内核 sid 归属：
+                // sub-visibility 与样式偏好（含外挂 ASS 的 MarginV 通道）
+                // 都要按新激活轨重发，防止上一轨的内核属性残留。
+                _reapplyKernelSubtitleStyleAfterSelectionChange();
               }
             },
           );
@@ -1365,8 +1366,10 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
     debugPrint('VideoPlayerState: 外部字幕自动加载: $fileName');
     // 自动加载在 SubtitleManager 内部激活（不经
     // VideoPlayerState.setExternalSubtitle）。若激活的是内核轨外挂 ASS，
-    // 整块移动模式的 sub-visibility 必须重新同步让位 libass 样式渲染。
-    applyEmbeddedSubtitleOverlayKernelState();
+    // 必须重同步：sub-visibility 让位 libass 样式渲染，样式偏好（含
+    // sub-pos/sub-scale/force-style→MarginV 映射）重发——否则内核里残留
+    // 上一次/上一部视频的 sub-pos，双语两行收拢、位置悬空。
+    _reapplyKernelSubtitleStyleAfterSelectionChange();
     _notifyListeners();
   }
 
