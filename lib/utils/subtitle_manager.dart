@@ -14,6 +14,7 @@ import 'package:nipaplay/services/emby_track_application.dart' as emby_tracks;
 import 'package:nipaplay/utils/media_source_utils.dart';
 import 'package:nipaplay/utils/subtitle_file_utils.dart';
 import 'package:nipaplay/utils/subtitle_language_utils.dart';
+import 'ass_margin_shift.dart';
 
 /// 字幕管理器类，负责处理与字幕相关的所有功能
 class SubtitleManager extends ChangeNotifier {
@@ -643,6 +644,9 @@ class SubtitleManager extends ChangeNotifier {
     // ExternalSubtitleOverlay 仍按旧路径渲染（"外挂轨道还在"）。
     _activeExternalSubtitlePaths.clear();
     _pathDisplayState.clear();
+    // 平移副本状态一并复位：切集/清除外挂后内核轨会被重新挂载或清理，
+    // 残留的 Δ 状态会让下一次激活的副本判定错乱。
+    resetExternalAssMarginShift();
     // 全部外挂已卸载：解析缓存一并释放（切集/重置时旧字幕不再需要）。
     for (final cachedPath in List<String>.from(_subtitleCache.keys)) {
       _evictSubtitleCache(cachedPath);
@@ -965,6 +969,97 @@ class SubtitleManager extends ChangeNotifier {
   bool externalSubtitleRenderedInApp(String path) =>
       _shouldRenderExternalSubtitleInApp(path);
 
+  // ---- 外挂 ASS MarginV 平移副本（位置滑块通道，见 ass_margin_shift.dart）----
+
+  /// 内核里实际加载的外挂轨文件（可能是编码修复后的转码副本，不一定是
+  /// 原始路径）；平移副本以它为基底，Δ=0 回落也回到它。
+  String? _activeKernelExternalSubtitlePath;
+  Timer? _marginShiftDebounce;
+  int _pendingMarginShiftDelta = 0;
+  String? _marginShiftBasePath;
+  int _activeMarginShiftDelta = 0;
+  static const Duration _marginShiftDebounceDuration = Duration(
+    milliseconds: 400,
+  );
+
+  /// 外挂 ASS 的位置滑块通道：按 Δ 逐样式加性平移 MarginV 生成副本并
+  /// 热重载内核轨（防抖合并拖动）。单值 force-style 会抹掉双语两行的
+  /// 边距差（跨层事件无碰撞堆叠、直接重合），sub-pos 是按比例插值收拢
+  /// ——只有加性平移保排版。
+  void requestExternalAssMarginShift(int deltaY) {
+    if (kIsWeb || !_isMediaKitKernel()) return;
+    if (!isKernelRenderedExternalAssActive()) return;
+    final base = _activeKernelExternalSubtitlePath ??
+        getActiveExternalSubtitlePath();
+    if (base == null || base.isEmpty || !File(base).existsSync()) return;
+    if (deltaY == _activeMarginShiftDelta && _marginShiftBasePath == base) {
+      return;
+    }
+    _pendingMarginShiftDelta = deltaY;
+    _marginShiftDebounce?.cancel();
+    _marginShiftDebounce = Timer(_marginShiftDebounceDuration, () {
+      unawaited(_applyExternalAssMarginShift(_pendingMarginShiftDelta));
+    });
+  }
+
+  Future<void> _applyExternalAssMarginShift(int deltaY) async {
+    final base = _activeKernelExternalSubtitlePath ??
+        getActiveExternalSubtitlePath();
+    if (base == null || base.isEmpty) return;
+    try {
+      if (deltaY == 0) {
+        if (_activeMarginShiftDelta != 0) {
+          _activeMarginShiftDelta = 0;
+          _marginShiftBasePath = null;
+          _player.setMedia(base, MediaType.subtitle);
+          debugPrint('SubtitleManager: 外挂ASS平移复位，回载原文件');
+        }
+        return;
+      }
+      final decoded = await SubtitleParser.decodeSubtitleFile(
+        base,
+        allowUnknownFormat: true,
+      );
+      if (decoded == null) return;
+      final rewritten = rewriteAssMarginV(decoded.text, deltaY);
+      if (rewritten == null) {
+        debugPrint('SubtitleManager: 外挂ASS平移跳过（无 Style/MarginV 列）');
+        return;
+      }
+      final cacheDir = await _getSubtitleCacheDirectory();
+      final shiftedDir = Directory(p.join(cacheDir.path, 'subtitle_shifted'));
+      if (!await shiftedDir.exists()) {
+        await shiftedDir.create(recursive: true);
+      }
+      final stat = await File(base).stat();
+      final hash = sha1.convert(utf8.encode(
+        '$base|${stat.size}|${stat.modified.millisecondsSinceEpoch}',
+      )).toString();
+      final variantPath = p.join(shiftedDir.path, '${hash}_d$deltaY.ass');
+      final variantFile = File(variantPath);
+      if (!await variantFile.exists()) {
+        await variantFile.writeAsString(rewritten, encoding: utf8);
+      }
+      _activeMarginShiftDelta = deltaY;
+      _marginShiftBasePath = base;
+      _player.setMedia(variantPath, MediaType.subtitle);
+      debugPrint('SubtitleManager: 外挂ASS MarginV 平移 Δ=$deltaY 已重载');
+    } catch (e) {
+      debugPrint('SubtitleManager: 外挂ASS平移失败: $e');
+    }
+  }
+
+  /// 清空平移状态（切集/清除外挂时调用）；不主动回载——内核轨随后会被
+  /// 清理或重新挂载。
+  void resetExternalAssMarginShift() {
+    _marginShiftDebounce?.cancel();
+    _marginShiftDebounce = null;
+    _pendingMarginShiftDelta = 0;
+    _activeMarginShiftDelta = 0;
+    _marginShiftBasePath = null;
+    _activeKernelExternalSubtitlePath = null;
+  }
+
   /// 当前激活的外挂字幕是否为内核轨 ASS/SSA（libmpv 下由 libass 按脚本
   /// 样式渲染：\pos 定位、彩色注解、卡拉OK等）。
   ///
@@ -1108,6 +1203,9 @@ class SubtitleManager extends ChangeNotifier {
     }
 
     _player.setMedia(path, MediaType.subtitle);
+    // 记录内核实际加载的外挂轨路径（可能是编码修复后的转码副本），
+    // MarginV 平移副本以它为基底。
+    _activeKernelExternalSubtitlePath = path;
     // libmpv 内核轨：挂载后应用持久化的全局字幕位置（sub-pos），
     // 否则内核 ASS 用 mpv 默认位置，滑块设置的 0-100 不生效。
     if (_player.getPlayerKernelName() == 'Media Kit') {

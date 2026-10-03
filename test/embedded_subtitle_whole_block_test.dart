@@ -226,21 +226,21 @@ void main() {
     });
 
     // 默认位置（100）：无任何偏移 → 纯脚本样式（override=no、force-style
-    // 空、sub-pos 复位默认）。sub-pos 不得跟随滑块——其逐行插值会把双语
-    // 两行挤在一起。
+    // 空、sub-pos 复位默认）。sub-pos 不得跟随滑块——其按比例插值会把双
+    // 语两行收拢；force-style 也不得携带 MarginV——单值覆盖会把分层双语
+    // 两行钉到同一位置。位置通道是 MarginV 平移副本（SubtitleManager）。
     await videoState.applySubtitleStylePreference();
     expect(delegate.writtenProperties['sub-pos'], '100');
     expect(delegate.writtenProperties['sub-ass-force-style'], '');
     expect(delegate.writtenProperties['sub-ass-override'], 'no');
 
-    // 位置 50：位移改走 force-style MarginV 线性平移（PlayResY≈视频高度
-    // 1080 兜底 → 50% = 540），override 升 yes 让位移/大小滑块生效，
-    // \pos 定位的彩色注解与脚本配色不受影响。
+    // 位置 50：内核样式属性保持纯净（样式仍由脚本主导），位移交给平移
+    // 副本通道（文件不存在时请求被守卫跳过，不产生热重载）。
     await videoState.setSubtitlePosition(50);
     await videoState.applySubtitleStylePreference();
     expect(delegate.writtenProperties['sub-pos'], '100');
-    expect(delegate.writtenProperties['sub-ass-force-style'], 'MarginV=540');
-    expect(delegate.writtenProperties['sub-ass-override'], 'yes');
+    expect(delegate.writtenProperties['sub-ass-force-style'], '');
+    expect(delegate.writtenProperties['sub-ass-override'], 'no');
 
     // 取消外挂（切回内嵌轨）后恢复滑块语义：位置跟随滑块（sub-pos）。
     videoState.setExternalSubtitle('');

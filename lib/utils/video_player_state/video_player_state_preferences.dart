@@ -2540,45 +2540,34 @@ extension VideoPlayerStatePreferences on VideoPlayerState {
       if (playerKernelName != 'Media Kit' && playerKernelName != 'MDK') {
               return;
             }
-      // 外挂 ASS/SSA 内核轨（libmpv）：颜色/描边/粗斜体等样式字段保持脚本
-      // 主导（force-style 不下发颜色类字段），但位置/大小滑块必须保留可用
-      // 通道——sub-pos 一偏离默认，libass 就对多行/多事件逐行插值（双语两
-      // 行收拢挤在一起），且 override=no 时被内核整体忽略（滑块失效）。改
-      // 用 force-style 的 MarginV/MarginL/R 做线性平移：双语两行同值移动、
-      // libass 碰撞堆叠的行距不变，\pos 定位的彩色注解完全不受影响；
-      // sub-scale（大小滑块）在 override=yes 时同样线性生效。MarginV 按
-      // PlayResY≈视频高度估算，老压制（小 PlayRes）位移会放大，与水平
-      // 边距滑块的既有语义一致。时轴延迟照常下发。
+      // 外挂 ASS/SSA 内核轨（libmpv）：颜色/描边/字体等样式字段一律保持
+      // 脚本主导（force-style 恒空、override 仅在字号偏离时升 yes 让
+      // sub-scale 生效）。位置滑块不走 sub-pos（按比例插值，双语趋顶收
+      // 拢）也不走 force-style MarginV（单值覆盖会抹掉分层双语两行的边
+      // 距差、直接重合）——改由 SubtitleManager 按逐样式加性平移生成副
+      // 本热重载（防抖），\pos 注释与作者行距原样保留。时轴延迟照常下发。
       if (playerKernelName == 'Media Kit' &&
           isKernelRenderedExternalAssActive) {
         player.setProperty(
           'sub-pos',
           VideoPlayerState.defaultSubtitlePosition.toStringAsFixed(0),
         );
+        player.setProperty('sub-ass-force-style', '');
+        final scaleDeviates = (_subtitleScale - 1.0).abs() >= 0.001;
+        player.setProperty(
+          'sub-ass-override',
+          scaleDeviates ? 'yes' : 'no',
+        );
+        player.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
+        player.setProperty('sub-delay', subtitleDelaySeconds.toStringAsFixed(2));
         final effectivePos =
             (_subtitlePosition - _subtitleMarginY * 0.1).clamp(0.0, 100.0);
-        final marginV = ((VideoPlayerState.defaultSubtitlePosition -
+        final deltaY = ((VideoPlayerState.defaultSubtitlePosition -
                     effectivePos) /
                 100.0 *
                 _estimateExternalAssPlayResY())
             .round();
-        final marginXDeviates = _subtitleMarginX.abs() >= 0.5;
-        final styleParts = <String>[
-          if (marginV != 0) 'MarginV=$marginV',
-          if (marginXDeviates)
-            (_subtitleAlignX == SubtitleAlignX.right
-                ? 'MarginR=${_subtitleMarginX.round()}'
-                : 'MarginL=${_subtitleMarginX.round()}'),
-        ];
-        player.setProperty('sub-ass-force-style', styleParts.join(','));
-        final positionalDeviates = marginV != 0 || marginXDeviates;
-        final scaleDeviates = (_subtitleScale - 1.0).abs() >= 0.001;
-        player.setProperty(
-          'sub-ass-override',
-          positionalDeviates || scaleDeviates ? 'yes' : 'no',
-        );
-        player.setProperty('sub-scale', _subtitleScale.toStringAsFixed(2));
-        player.setProperty('sub-delay', subtitleDelaySeconds.toStringAsFixed(2));
+        _subtitleManager.requestExternalAssMarginShift(deltaY);
         return;
       }
             // mdk 属性名是 subtitle.scale（sub-scale 是 mpv 的）——之前用错
