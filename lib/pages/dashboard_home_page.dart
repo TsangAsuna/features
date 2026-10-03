@@ -31,6 +31,7 @@ import 'package:nipaplay/models/trending_bangumi.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tv_safe_blur.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_card.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_skeleton.dart';

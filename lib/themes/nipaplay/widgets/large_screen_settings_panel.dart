@@ -26,6 +26,7 @@ class NipaplayLargeScreenSettingsPanel extends StatefulWidget {
     super.key,
     required this.isDarkMode,
     this.focusedIndex = 0,
+    this.focusedIndexListenable,
     this.commandNotifier,
     this.onFocusedIndexChanged,
     this.onEntryCountChanged,
@@ -35,6 +36,11 @@ class NipaplayLargeScreenSettingsPanel extends StatefulWidget {
 
   final bool isDarkMode;
   final int focusedIndex;
+
+  /// 焦点索引的可监听来源。提供时（scaffold 用 ValueNotifier 持有索引），
+  /// 面板内部自行监听重建菜单高亮，不再依赖外层 setState。
+  final ValueListenable<int>? focusedIndexListenable;
+
   final ValueListenable<NipaplayLargeScreenSettingsPanelCommand?>?
       commandNotifier;
   final ValueChanged<int>? onFocusedIndexChanged;
@@ -69,6 +75,37 @@ class _NipaplayLargeScreenSettingsPanelState
     _entries = const <NipaplaySettingEntry>[];
     _earlyKeyHandler = _handleEarlyKeyEvent;
     FocusManager.instance.addEarlyKeyEventHandler(_earlyKeyHandler!);
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _refreshEntries();
+  }
+
+  @override
+  void didUpdateWidget(
+      covariant NipaplayLargeScreenSettingsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.entriesOverride != widget.entriesOverride) {
+      _refreshEntries();
+    }
+  }
+
+  /// 构建设置入口列表。
+  ///
+  /// 只在依赖（主题/语言）或 override 变化时重建，而不是每次 build。
+  /// 这样菜单焦点移动引发的面板重建会复用同一批 page widget 实例，
+  /// 内容区的 KeyedSubtree（按 entry id 定键）子树可被整块跳过，
+  /// 快速滚动设置菜单时不再逐键重建整个设置页。
+  void _refreshEntries() {
+    _entries = widget.entriesOverride ?? buildNipaplaySettingEntries(context);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      widget.onEntryCountChanged?.call(_entries.length);
+    });
   }
 
   @override
@@ -117,14 +154,6 @@ class _NipaplayLargeScreenSettingsPanelState
 
   @override
   Widget build(BuildContext context) {
-    _entries = widget.entriesOverride ?? buildNipaplaySettingEntries(context);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-      widget.onEntryCountChanged?.call(_entries.length);
-    });
-
     final Color inactiveColor =
         widget.isDarkMode ? Colors.white70 : Colors.black54;
     final Color panelBackgroundColor =
@@ -137,35 +166,72 @@ class _NipaplayLargeScreenSettingsPanelState
       );
     }
 
-    if (_selectedIndex < 0 || _selectedIndex >= _entries.length) {
-      _selectedIndex = widget.focusedIndex.clamp(0, _entries.length - 1);
+    final listenable = widget.focusedIndexListenable;
+    final Widget panelContent;
+    if (listenable == null) {
+      panelContent = _buildPanelContent(
+        inactiveColor: inactiveColor,
+        rawFocusedIndex: _resolveFocusedIndex(),
+      );
+    } else {
+      // 索引变化只重建本面板，不触发 scaffold 级重建。
+      panelContent = ValueListenableBuilder<int>(
+        valueListenable: listenable,
+        builder: (context, value, _) => _buildPanelContent(
+          inactiveColor: inactiveColor,
+          rawFocusedIndex: value,
+        ),
+      );
     }
 
-    final normalizedFocusedIndex =
-        widget.focusedIndex.clamp(0, _entries.length - 1);
-    if (normalizedFocusedIndex != widget.focusedIndex) {
+    return ColoredBox(
+      color: panelBackgroundColor,
+      child: panelContent,
+    );
+  }
+
+  /// 解析当前菜单焦点索引：优先取 listenable 的实时值，
+  /// 避免面板尚未重建时读到过期的 widget.focusedIndex。
+  int _resolveFocusedIndex([int? override]) {
+    final int raw = override ??
+        widget.focusedIndexListenable?.value ??
+        widget.focusedIndex;
+    if (_entries.isEmpty) {
+      return 0;
+    }
+    return raw.clamp(0, _entries.length - 1);
+  }
+
+  Widget _buildPanelContent({
+    required Color inactiveColor,
+    required int rawFocusedIndex,
+  }) {
+    final normalizedFocusedIndex = _resolveFocusedIndex(rawFocusedIndex);
+    if (normalizedFocusedIndex != rawFocusedIndex) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         widget.onFocusedIndexChanged?.call(normalizedFocusedIndex);
       });
     }
 
-    return ColoredBox(
-      color: panelBackgroundColor,
-      child: _NipaplayLargeScreenSettingsPanelCommandHost(
-        commandNotifier: widget.commandNotifier,
-        onNavigateUp: _handleNavigateUp,
-        onNavigateDown: _handleNavigateDown,
-        onNavigateLeft: _handleNavigateLeft,
-        onNavigateRight: _handleNavigateRight,
-        onActivateFocused: () async {
-          if (_isContentFocused) {
-            _activateContentFocus();
-            return;
-          }
-          _selectIndex(normalizedFocusedIndex);
-          _setContentFocused(true);
-        },
-        child: Row(
+    if (_selectedIndex < 0 || _selectedIndex >= _entries.length) {
+      _selectedIndex = normalizedFocusedIndex;
+    }
+
+    return _NipaplayLargeScreenSettingsPanelCommandHost(
+      commandNotifier: widget.commandNotifier,
+      onNavigateUp: _handleNavigateUp,
+      onNavigateDown: _handleNavigateDown,
+      onNavigateLeft: _handleNavigateLeft,
+      onNavigateRight: _handleNavigateRight,
+      onActivateFocused: () async {
+        if (_isContentFocused) {
+          _activateContentFocus();
+          return;
+        }
+        _selectIndex(normalizedFocusedIndex);
+        _setContentFocused(true);
+      },
+      child: Row(
           children: [
             Focus(
               focusNode: _menuFocusNode,
@@ -290,8 +356,7 @@ class _NipaplayLargeScreenSettingsPanelState
             ),
           ],
         ),
-      ),
-    );
+      );
   }
 
   void _selectIndex(int index) {
@@ -374,7 +439,7 @@ class _NipaplayLargeScreenSettingsPanelState
       return;
     }
     if (!_isContentFocused) {
-      _selectIndex(widget.focusedIndex);
+      _selectIndex(_resolveFocusedIndex());
       _setContentFocused(true);
       return;
     }
@@ -411,8 +476,9 @@ class _NipaplayLargeScreenSettingsPanelState
 
   void _moveMenuFocus(int delta) {
     if (_entries.isEmpty) return;
-    final next = (widget.focusedIndex + delta).clamp(0, _entries.length - 1);
-    if (next == widget.focusedIndex) return;
+    final current = _resolveFocusedIndex();
+    final next = (current + delta).clamp(0, _entries.length - 1);
+    if (next == current) return;
     context.read<LargeScreenUiSfxService>().playFocusChange();
     widget.onFocusedIndexChanged?.call(next);
     _selectIndex(next);
@@ -477,7 +543,15 @@ class _NipaplayLargeScreenSettingsPanelState
     final target = direction == TraversalDirection.up
         ? scrollController.position.minScrollExtent
         : scrollController.position.maxScrollExtent;
-    scrollController.jumpTo(target);
+    if ((scrollController.offset - target).abs() < 1) {
+      return;
+    }
+    // 边界回弹用短动画代替瞬时 jump，与外层 scaffold 行为保持一致。
+    scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   bool _ensureContentFocus() {

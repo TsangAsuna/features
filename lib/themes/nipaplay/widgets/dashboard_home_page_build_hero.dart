@@ -254,7 +254,7 @@ extension DashboardHomePageHeroBuild on _DashboardHomePageState {
               right: 16,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: BackdropFilter(
+                child: TvSafeBackdropFilter(
                   filter: ImageFilter.blur(
                       sigmaX: context
                               .watch<AppearanceSettingsProvider>()
@@ -522,7 +522,7 @@ extension DashboardHomePageHeroBuild on _DashboardHomePageState {
               right: 8,
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: BackdropFilter(
+                child: TvSafeBackdropFilter(
                   filter: ImageFilter.blur(
                       sigmaX: context
                               .watch<AppearanceSettingsProvider>()

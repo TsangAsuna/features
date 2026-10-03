@@ -501,6 +501,12 @@ class _SubtitleListMenuState extends State<SubtitleListMenu> {
       final newSubtitleText = videoState.getCurrentSubtitleText();
 
       if (newSubtitleText.isNotEmpty) {
+        // 该分支每 500ms 执行一次；台词未变时不要重建列表
+        // （菜单叠在视频上层，无条件 setState 会造成 2Hz 重绘）。
+        if (_allSubtitleEntries.length == 1 &&
+            _allSubtitleEntries.first.content == newSubtitleText) {
+          return;
+        }
         final currentEntry = SubtitleEntry(
           startTimeMs: _currentTimeMs - 1000,
           endTimeMs: _currentTimeMs + 4000,

@@ -18,6 +18,7 @@ import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/utils/app_accent_color.dart';
 import 'package:nipaplay/utils/shortcut_tooltip_manager.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/video_controls_overlay.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tv_safe_blur.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/back_button_widget.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/anime_info_widget.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/shadow_action_button.dart';
@@ -153,6 +154,15 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
       isLargeScreen: NipaplayLargeScreenModeScope.isActiveOf(context),
       hasVideo: videoState.hasVideo,
     )) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        if (!NipaplayLargeScreenPlayerMenuScope.maybeHandleBackPress(context)) {
+          final shouldExit = await videoState.handleBackButton();
+          if (shouldExit) {
+            await videoState.resetPlayer();
+          }
+        }
+        return false;
+      }
       if (!NipaplayLargeScreenPlayerMenuScope.maybeHandleMenuPress(context)) {
         videoState.setControlsHovered(false);
         videoState.revealLargeScreenControls();
@@ -650,7 +660,7 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
             child: IgnorePointer(
               ignoring: !showChrome,
               child: ClipRect(
-                child: BackdropFilter(
+                child: TvSafeBackdropFilter(
                   filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                   child: Container(
                     height: 76,
@@ -788,7 +798,7 @@ class _PlayVideoPageState extends State<PlayVideoPage> {
             onExit: (_) => videoState.setControlsHovered(false),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
-              child: BackdropFilter(
+              child: TvSafeBackdropFilter(
                 filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
                 child: Container(
                   padding: const EdgeInsets.fromLTRB(22, 16, 22, 18),

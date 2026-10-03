@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tv_safe_blur.dart';
 
 class ArrowMenuContainer extends StatelessWidget {
   final Color backgroundColor;
@@ -176,7 +177,7 @@ class _MaybeBackdropFilter extends StatelessWidget {
     if (!enabled) {
       return child;
     }
-    return BackdropFilter(
+    return TvSafeBackdropFilter(
       filter: ImageFilter.blur(sigmaX: blurValue, sigmaY: blurValue),
       child: child,
     );

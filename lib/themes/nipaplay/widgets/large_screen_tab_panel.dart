@@ -23,6 +23,7 @@ class NipaplayLargeScreenTabPanel extends StatelessWidget {
     required this.tabPage,
     required this.tabController,
     this.focusedIndex = 0,
+    this.focusedIndexListenable,
     this.commandNotifier,
     this.onFocusedIndexChanged,
     this.onTabActivated,
@@ -36,6 +37,11 @@ class NipaplayLargeScreenTabPanel extends StatelessWidget {
   final List<Widget> tabPage;
   final TabController tabController;
   final int focusedIndex;
+
+  /// 焦点索引的可监听来源。提供时（scaffold 用 ValueNotifier 持有索引），
+  /// 面板内部自行监听重建菜单高亮，不再依赖外层 setState。
+  final ValueListenable<int>? focusedIndexListenable;
+
   final ValueListenable<NipaplayLargeScreenTabPanelCommand?>? commandNotifier;
   final ValueChanged<int>? onFocusedIndexChanged;
   final VoidCallback? onTabActivated;
@@ -175,13 +181,33 @@ class NipaplayLargeScreenTabPanel extends StatelessWidget {
       ...tabEntries,
       ...actionEntries,
     ];
-    final normalizedFocusedIndex =
-        entries.isEmpty ? 0 : focusedIndex.clamp(0, entries.length - 1);
 
-    if (normalizedFocusedIndex != focusedIndex) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        onFocusedIndexChanged?.call(normalizedFocusedIndex);
-      });
+    final Widget menuContent;
+    final listenable = focusedIndexListenable;
+    if (listenable == null) {
+      menuContent = _buildMenuContent(
+        context,
+        entries: entries,
+        tabEntries: tabEntries,
+        actionEntries: actionEntries,
+        activeColor: activeColor,
+        inactiveColor: inactiveColor,
+        rawFocusedIndex: focusedIndex,
+      );
+    } else {
+      // 索引变化只重建本面板的菜单区，不触发 scaffold 级重建。
+      menuContent = ValueListenableBuilder<int>(
+        valueListenable: listenable,
+        builder: (context, value, _) => _buildMenuContent(
+          context,
+          entries: entries,
+          tabEntries: tabEntries,
+          actionEntries: actionEntries,
+          activeColor: activeColor,
+          inactiveColor: inactiveColor,
+          rawFocusedIndex: value,
+        ),
+      );
     }
 
     return ColoredBox(
@@ -189,74 +215,95 @@ class NipaplayLargeScreenTabPanel extends StatelessWidget {
       child: NipaplayLargeScreenSidePanel(
         isDarkMode: isDarkMode,
         width: kNipaplayLargeScreenTabPanelWidth,
-        child: Padding(
-          padding: const EdgeInsets.only(
-            top: kNipaplayLargeScreenBottomHintHeight,
-            bottom: kNipaplayLargeScreenBottomHintHeight,
-          ),
-          child: _NipaplayLargeScreenTabPanelCommandHost(
-            commandNotifier: commandNotifier,
-            onActivateFocused: () {
-              if (entries.isEmpty) {
-                return;
-              }
-              entries[normalizedFocusedIndex].onTap();
-            },
-            child: Column(
-              children: [
-                Expanded(
-                  child: ListView.builder(
-                    padding: EdgeInsets.zero,
-                    itemCount: tabEntries.length,
-                    itemBuilder: (context, index) {
-                      final bool isSelectedByTab = currentIndex == index;
-                      final bool isSelectedByFocus =
-                          index == normalizedFocusedIndex;
-                      final bool isActive =
-                          isSelectedByTab || isSelectedByFocus;
-                      final Color itemColor =
-                          isActive ? Colors.white : inactiveColor;
+        child: menuContent,
+      ),
+    );
+  }
 
-                      return NipaplayLargeScreenSidePanelItem(
-                        isSelected: isSelectedByTab,
-                        isFocused: isSelectedByFocus,
-                        activeColor: activeColor,
-                        inactiveColor: inactiveColor,
-                        onTap: () {
-                          onFocusedIndexChanged?.call(index);
-                          tabEntries[index].onTap();
-                        },
-                        child: tabEntries[index].buildChild(itemColor),
-                      );
+  Widget _buildMenuContent(
+    BuildContext context, {
+    required List<_NipaplayLargeScreenMenuEntry> entries,
+    required List<_NipaplayLargeScreenMenuEntry> tabEntries,
+    required List<_NipaplayLargeScreenMenuEntry> actionEntries,
+    required Color activeColor,
+    required Color inactiveColor,
+    required int rawFocusedIndex,
+  }) {
+    final normalizedFocusedIndex =
+        entries.isEmpty ? 0 : rawFocusedIndex.clamp(0, entries.length - 1);
+
+    if (normalizedFocusedIndex != rawFocusedIndex) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        onFocusedIndexChanged?.call(normalizedFocusedIndex);
+      });
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(
+        top: kNipaplayLargeScreenBottomHintHeight,
+        bottom: kNipaplayLargeScreenBottomHintHeight,
+      ),
+      child: _NipaplayLargeScreenTabPanelCommandHost(
+        commandNotifier: commandNotifier,
+        onActivateFocused: () {
+          if (entries.isEmpty) {
+            return;
+          }
+          entries[normalizedFocusedIndex].onTap();
+        },
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: tabEntries.length,
+                itemBuilder: (context, index) {
+                  final bool isSelectedByTab = currentIndex == index;
+                  final bool isSelectedByFocus =
+                      index == normalizedFocusedIndex;
+                  final bool isActive =
+                      isSelectedByTab || isSelectedByFocus;
+                  final Color itemColor =
+                      isActive ? Colors.white : inactiveColor;
+
+                  return NipaplayLargeScreenSidePanelItem(
+                    isSelected: isSelectedByTab,
+                    isFocused: isSelectedByFocus,
+                    activeColor: activeColor,
+                    inactiveColor: inactiveColor,
+                    onTap: () {
+                      onFocusedIndexChanged?.call(index);
+                      tabEntries[index].onTap();
                     },
-                  ),
-                ),
-                if (actionEntries.isNotEmpty)
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children:
-                        List.generate(actionEntries.length, (actionIndex) {
-                      final int entryIndex = tabEntries.length + actionIndex;
-                      final bool isFocused =
-                          entryIndex == normalizedFocusedIndex;
-                      final Color itemColor =
-                          isFocused ? Colors.white : inactiveColor;
-                      return NipaplayLargeScreenSidePanelItem(
-                        isSelected: false,
-                        isFocused: isFocused,
-                        activeColor: activeColor,
-                        inactiveColor: inactiveColor,
-                        onTap: () {
-                          onFocusedIndexChanged?.call(entryIndex);
-                          actionEntries[actionIndex].onTap();
-                        },
-                        child: actionEntries[actionIndex].buildChild(itemColor),
-                      );
-                    }),
-                  ),
-              ],
+                    child: tabEntries[index].buildChild(itemColor),
+                  );
+                },
+              ),
             ),
-          ),
+            if (actionEntries.isNotEmpty)
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                children:
+                    List.generate(actionEntries.length, (actionIndex) {
+                  final int entryIndex = tabEntries.length + actionIndex;
+                  final bool isFocused =
+                      entryIndex == normalizedFocusedIndex;
+                  final Color itemColor =
+                      isFocused ? Colors.white : inactiveColor;
+                  return NipaplayLargeScreenSidePanelItem(
+                    isSelected: false,
+                    isFocused: isFocused,
+                    activeColor: activeColor,
+                    inactiveColor: inactiveColor,
+                    onTap: () {
+                      onFocusedIndexChanged?.call(entryIndex);
+                      actionEntries[actionIndex].onTap();
+                    },
+                    child: actionEntries[actionIndex].buildChild(itemColor),
+                  );
+                }),
+              ),
+          ],
         ),
       ),
     );

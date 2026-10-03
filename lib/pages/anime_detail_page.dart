@@ -246,8 +246,10 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
   AppearanceSettingsProvider? _appearanceSettings;
   bool _isEpisodeListReversed = false;
   bool _isCleaningEpisodeHistory = false;
-  int? _hoveredEpisodeTileId;
-  int? _hoveredWatchToggleEpisodeId;
+  // 剧集列表 hover 状态用 ValueNotifier 持有：hover 只影响单条 tile 的
+  // 标题颜色/按钮高亮，走 setState 会重建整个 4000+ 行的详情页。
+  final ValueNotifier<int?> _hoveredEpisodeTileId = ValueNotifier(null);
+  final ValueNotifier<int?> _hoveredWatchToggleEpisodeId = ValueNotifier(null);
   final FocusNode _largeScreenDetailsFocusNode = FocusNode(
     debugLabel: 'large_screen_anime_detail_content_focus',
   );
@@ -588,6 +590,8 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
     _tabController?.dispose();
     _detailTabController?.removeListener(_handleDetailTabChange);
     _detailTabController?.dispose();
+    _hoveredEpisodeTileId.dispose();
+    _hoveredWatchToggleEpisodeId.dispose();
     _largeScreenDetailsFocusNode.dispose();
     super.dispose();
   }
@@ -2300,8 +2304,6 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                   future: historyFuture,
                   builder: (context, historySnapshot) {
                     final bool enableEpisodeHover = !globals.isTouch;
-                    final bool isEpisodeHovered = enableEpisodeHover &&
-                        _hoveredEpisodeTileId == episode.id;
                     Widget leadingIcon =
                         SizedBox(width: 20); // Default empty space
                     String? progressText;
@@ -2373,13 +2375,12 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                           ? SystemMouseCursors.click
                           : SystemMouseCursors.basic,
                       onEnter: enableEpisodeHover
-                          ? (_) =>
-                              setState(() => _hoveredEpisodeTileId = episode.id)
+                          ? (_) => _hoveredEpisodeTileId.value = episode.id
                           : null,
                       onExit: enableEpisodeHover
                           ? (_) {
-                              if (_hoveredEpisodeTileId == episode.id) {
-                                setState(() => _hoveredEpisodeTileId = null);
+                              if (_hoveredEpisodeTileId.value == episode.id) {
+                                _hoveredEpisodeTileId.value = null;
                               }
                             }
                           : null,
@@ -2390,15 +2391,25 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                           title: Row(
                             children: [
                               Expanded(
-                                child: Text(episode.title,
-                                    locale: const Locale('zh-Hans', 'zh'),
-                                    style: TextStyle(
-                                        color: isEpisodeHovered
-                                            ? accentColor
-                                            : textColor.withOpacity(0.9),
-                                        fontSize: 13),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis),
+                                // 标题色是 tile hover 唯一的视觉变化；用
+                                // ValueListenableBuilder 局部重建，
+                                // 不再为一次 hover 重建整页。
+                                child: ValueListenableBuilder<int?>(
+                                  valueListenable: _hoveredEpisodeTileId,
+                                  builder: (context, hoveredTileId, _) =>
+                                      Text(episode.title,
+                                          locale: const Locale('zh-Hans', 'zh'),
+                                          style: TextStyle(
+                                              color: enableEpisodeHover &&
+                                                      hoveredTileId ==
+                                                          episode.id
+                                                  ? accentColor
+                                                  : textColor
+                                                      .withOpacity(0.9),
+                                              fontSize: 13),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis),
+                                ),
                               ),
                               if (DandanplayService.isLoggedIn &&
                                   _dandanplayWatchStatus
@@ -2458,47 +2469,48 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
                                   ),
                                 ),
                               if (DandanplayService.isLoggedIn)
-                                _EpisodeWatchToggleButton(
-                                  isEnabled: !isEpisodeWatched,
-                                  isHovered: !globals.isTouch &&
-                                      !isEpisodeWatched &&
-                                      _hoveredWatchToggleEpisodeId ==
-                                          episode.id,
-                                  isLargeScreenMode: _isLargeScreenModeActive,
-                                  onHoverChanged: (value) {
-                                    if (!mounted || isEpisodeWatched) return;
-                                    setState(() {
-                                      _hoveredWatchToggleEpisodeId =
+                                ValueListenableBuilder<int?>(
+                                  valueListenable: _hoveredWatchToggleEpisodeId,
+                                  builder: (context, hoveredToggleId, _) =>
+                                      _EpisodeWatchToggleButton(
+                                    isEnabled: !isEpisodeWatched,
+                                    isHovered: !globals.isTouch &&
+                                        !isEpisodeWatched &&
+                                        hoveredToggleId == episode.id,
+                                    isLargeScreenMode: _isLargeScreenModeActive,
+                                    onHoverChanged: (value) {
+                                      if (!mounted || isEpisodeWatched) return;
+                                      _hoveredWatchToggleEpisodeId.value =
                                           value ? episode.id : null;
-                                    });
-                                  },
-                                  onTap: isEpisodeWatched
-                                      ? null
-                                      : () async {
-                                          try {
-                                            final newStatus =
-                                                !(_dandanplayWatchStatus[
-                                                        episode.id] ??
-                                                    false);
-                                            await updateEpisodeWatchStatus(
-                                              episode.id,
-                                              newStatus,
-                                            );
-                                            setState(() {
-                                              _dandanplayWatchStatus[
-                                                  episode.id] = newStatus;
-                                            });
-                                          } catch (e) {
-                                            _showBlurSnackBar(context,
-                                                '更新观看状态失败: ${e.toString()}');
-                                          }
-                                        },
-                                  icon: isEpisodeWatched
-                                      ? Ionicons.checkmark_circle
-                                      : Ionicons.checkmark_circle_outline,
-                                  idleColor: isEpisodeWatched
-                                      ? progressGreen
-                                      : secondaryTextColor.withOpacity(0.4),
+                                    },
+                                    onTap: isEpisodeWatched
+                                        ? null
+                                        : () async {
+                                            try {
+                                              final newStatus =
+                                                  !(_dandanplayWatchStatus[
+                                                          episode.id] ??
+                                                      false);
+                                              await updateEpisodeWatchStatus(
+                                                episode.id,
+                                                newStatus,
+                                              );
+                                              setState(() {
+                                                _dandanplayWatchStatus[
+                                                    episode.id] = newStatus;
+                                              });
+                                            } catch (e) {
+                                              _showBlurSnackBar(context,
+                                                  '更新观看状态失败: ${e.toString()}');
+                                            }
+                                          },
+                                    icon: isEpisodeWatched
+                                        ? Ionicons.checkmark_circle
+                                        : Ionicons.checkmark_circle_outline,
+                                    idleColor: isEpisodeWatched
+                                        ? progressGreen
+                                        : secondaryTextColor.withOpacity(0.4),
+                                  ),
                                 ),
                             ],
                           ),

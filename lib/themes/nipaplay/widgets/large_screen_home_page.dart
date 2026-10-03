@@ -28,7 +28,15 @@ class NipaplayLargeScreenContentPage extends StatelessWidget {
     final target = direction == TraversalDirection.up
         ? scrollController.position.minScrollExtent
         : scrollController.position.maxScrollExtent;
-    scrollController.jumpTo(target);
+    if ((scrollController.offset - target).abs() < 1) {
+      return;
+    }
+    // 边界回弹用短动画代替瞬时 jump，避免焦点导航到列表边缘时画面突跳。
+    scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   KeyEventResult _handleKeyEvent(BuildContext context, KeyEvent event) {

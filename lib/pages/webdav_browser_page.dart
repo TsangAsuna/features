@@ -470,6 +470,8 @@ class _WebDAVBrowserPageState extends State<WebDAVBrowserPage> {
         }
 
         // 自动选择新添加的服务器并加载目录
+        // （上一行 await 期间页面可能已被关闭，先确认仍在树上。）
+        if (!mounted) return;
         setState(() {
           _currentConnection = newConnection;
           _currentPath = '/';

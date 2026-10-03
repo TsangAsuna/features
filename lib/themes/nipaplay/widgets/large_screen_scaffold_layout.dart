@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:universal_gamepad/universal_gamepad.dart';
@@ -8,6 +9,7 @@ import 'package:nipaplay/themes/nipaplay/widgets/blur_dropdown.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_bottom_hint_overlay.dart';
 import 'package:nipaplay/services/auto_next_episode_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_input_controls.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_key_repeat_coalescer.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_player_menu_panel.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_player_menu_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_settings_panel.dart';
@@ -79,9 +81,23 @@ class _NipaplayLargeScreenScaffoldLayoutState
   bool _isSettingsPanelVisible = false;
   bool _isPlayerMenuVisible = false;
   DateTime? _lastPlayerMenuPressAt;
-  int _focusedMenuIndex = 0;
-  int _focusedSettingsIndex = 0;
+  bool _isExitingPlayback = false;
+  // 焦点索引用 ValueNotifier 持有：面板自行监听重建高亮，
+  // 避免每次方向键都在 scaffold 级 setState（会连带重建整棵 Stack）。
+  final ValueNotifier<int> _focusedMenuIndex = ValueNotifier<int>(0);
+  final ValueNotifier<int> _focusedSettingsIndex = ValueNotifier<int>(0);
   int _settingsEntryCount = 0;
+  // 键盘方向键 KeyRepeat 的节拍器：按住方向键时把系统级重复
+  // （约 30Hz）合并为固定节拍移动，让焦点高亮与滚动动画能完整推进。
+  final NipaplayKeyRepeatCoalescer _navRepeatCoalescer =
+      NipaplayKeyRepeatCoalescer();
+
+  static final Set<LogicalKeyboardKey> _arrowKeys = {
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+  };
 
   // 手柄输入
   StreamSubscription<GamepadEvent>? _gamepadSubscription;
@@ -119,10 +135,13 @@ class _NipaplayLargeScreenScaffoldLayoutState
   @override
   void dispose() {
     _cancelAllStickRepeats();
+    _navRepeatCoalescer.dispose();
     _gamepadSubscription?.cancel();
     _playerMenuInitialFocusNode.dispose();
     _settingsPanelCommand.dispose();
     _tabPanelCommand.dispose();
+    _focusedMenuIndex.dispose();
+    _focusedSettingsIndex.dispose();
     _inputFocusNode.dispose();
     super.dispose();
   }
@@ -131,13 +150,11 @@ class _NipaplayLargeScreenScaffoldLayoutState
   void didUpdateWidget(covariant NipaplayLargeScreenScaffoldLayout oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (_menuItemCount == 0) {
-      _focusedMenuIndex = 0;
+      _setFocusedMenuIndex(0);
       return;
     }
     final int maxIndex = _menuItemCount - 1;
-    if (_focusedMenuIndex > maxIndex || _focusedMenuIndex < 0) {
-      _focusedMenuIndex = _focusedMenuIndex.clamp(0, maxIndex);
-    }
+    _setFocusedMenuIndex(_focusedMenuIndex.value.clamp(0, maxIndex));
   }
 
   void _toggleTabPanel() {
@@ -150,11 +167,9 @@ class _NipaplayLargeScreenScaffoldLayoutState
     final bool willOpen = !_isTabPanelVisible;
     setState(() {
       _isTabPanelVisible = willOpen;
-      if (willOpen) {
-        _focusedMenuIndex = _clampMenuIndex(widget.currentIndex);
-      }
     });
     if (willOpen) {
+      _setFocusedMenuIndex(_clampMenuIndex(widget.currentIndex));
       context.read<LargeScreenUiSfxService>().playMenuOpen();
       _inputFocusNode.requestFocus();
     } else {
@@ -184,10 +199,10 @@ class _NipaplayLargeScreenScaffoldLayoutState
     final willOpen = !_isSettingsPanelVisible;
     setState(() {
       _isSettingsPanelVisible = !_isSettingsPanelVisible;
-      if (_isSettingsPanelVisible) {
-        _focusedSettingsIndex = _clampSettingsIndex(_focusedSettingsIndex);
-      }
     });
+    if (_isSettingsPanelVisible) {
+      _setFocusedSettingsIndex(_clampSettingsIndex(_focusedSettingsIndex.value));
+    }
     if (willOpen) {
       context.read<LargeScreenUiSfxService>().playOpenSubPage();
     } else {
@@ -279,6 +294,29 @@ class _NipaplayLargeScreenScaffoldLayoutState
     return true;
   }
 
+  bool _handlePlayerBackPress() {
+    if (_isExitingPlayback) return true;
+    if (_isSettingsPanelVisible) {
+      _closeSettingsPanel();
+    } else if (_isPlayerMenuVisible) {
+      _closePlayerMenu();
+    } else if (_isTabPanelVisible) {
+      _closeTabPanel();
+    } else {
+      unawaited(_exitPlaybackFromPlayerMenu(returnToMediaLibrary: true));
+    }
+    return true;
+  }
+
+  bool _handlePlayerInputCommand(VideoPlayerState videoState,
+      NipaplayLargeScreenInputCommand command) {
+    if (defaultTargetPlatform == TargetPlatform.android &&
+        command == NipaplayLargeScreenInputCommand.back) {
+      return _handlePlayerBackPress();
+    }
+    return _handlePlayerMenuPress(videoState);
+  }
+
   KeyEventResult _handlePlayerMediaKey(
     VideoPlayerState videoState,
     KeyEvent event,
@@ -347,15 +385,34 @@ class _NipaplayLargeScreenScaffoldLayoutState
     }
   }
 
-  Future<void> _exitPlaybackFromPlayerMenu() async {
+  Future<void> _exitPlaybackFromPlayerMenu(
+      {bool returnToMediaLibrary = false}) async {
+    if (_isExitingPlayback) return;
+    setState(() => _isExitingPlayback = true);
     // 退出播放时取消续播倒计时。
-    AutoNextEpisodeService.instance.cancelAutoNext();
-
-    final videoState = context.read<VideoPlayerState>();
-    _closePlayerMenu();
-    final shouldExit = await videoState.handleBackButton();
-    if (shouldExit) {
-      await videoState.resetPlayer();
+    try {
+      AutoNextEpisodeService.instance.cancelAutoNext();
+      final videoState = context.read<VideoPlayerState>();
+      _closePlayerMenu();
+      final shouldExit = await videoState.handleBackButton();
+      if (shouldExit) {
+        await videoState.resetPlayer();
+        if (mounted && returnToMediaLibrary) {
+          AppNavigationScope.maybeOf(context)
+              ?.onSelectPage(AppPageIds.mediaLibrary);
+        }
+      }
+    } catch (error, stack) {
+      FlutterError.reportError(FlutterErrorDetails(
+        exception: error,
+        stack: stack,
+        library: 'nipaplay',
+        context: ErrorDescription('while exiting large-screen playback'),
+      ));
+    } finally {
+      if (mounted) {
+        setState(() => _isExitingPlayback = false);
+      }
     }
   }
 
@@ -380,6 +437,13 @@ class _NipaplayLargeScreenScaffoldLayoutState
     return index.clamp(0, _settingsEntryCount - 1);
   }
 
+  void _setFocusedMenuIndex(int index) {
+    if (_focusedMenuIndex.value == index) {
+      return;
+    }
+    _focusedMenuIndex.value = index;
+  }
+
   void _moveMenuFocus(int delta) {
     if (!_isTabPanelVisible) {
       return;
@@ -388,13 +452,11 @@ class _NipaplayLargeScreenScaffoldLayoutState
     if (count <= 0) {
       return;
     }
-    final int newIndex = (_focusedMenuIndex + delta) % count;
+    final int newIndex = (_focusedMenuIndex.value + delta) % count;
     final int adjustedIndex = newIndex < 0 ? newIndex + count : newIndex;
-    if (_focusedMenuIndex != adjustedIndex) {
+    if (_focusedMenuIndex.value != adjustedIndex) {
       context.read<LargeScreenUiSfxService>().playFocusChange();
-      setState(() {
-        _focusedMenuIndex = adjustedIndex;
-      });
+      _setFocusedMenuIndex(adjustedIndex);
     }
   }
 
@@ -413,6 +475,13 @@ class _NipaplayLargeScreenScaffoldLayoutState
     _settingsPanelCommand.value = command;
   }
 
+  void _setFocusedSettingsIndex(int index) {
+    if (_focusedSettingsIndex.value == index) {
+      return;
+    }
+    _focusedSettingsIndex.value = index;
+  }
+
   void _jumpContentScrollBoundary(TraversalDirection direction) {
     if (direction != TraversalDirection.up &&
         direction != TraversalDirection.down) {
@@ -427,7 +496,15 @@ class _NipaplayLargeScreenScaffoldLayoutState
     final target = direction == TraversalDirection.up
         ? scrollController.position.minScrollExtent
         : scrollController.position.maxScrollExtent;
-    scrollController.jumpTo(target);
+    if ((scrollController.offset - target).abs() < 1) {
+      return;
+    }
+    // 边界回弹用短动画代替瞬时 jump，避免焦点连续导航时画面突跳。
+    scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 180),
+      curve: Curves.easeOutCubic,
+    );
   }
 
   void _ensurePrimaryFocusVisible() {
@@ -553,9 +630,13 @@ class _NipaplayLargeScreenScaffoldLayoutState
     }
   }
 
-  bool _handleTvOSRootPopRoute() {
+  bool _handleRootPopRoute() {
+    if (_isExitingPlayback) return true;
     final videoState = context.read<VideoPlayerState>();
     if (_isPlayerPlaybackContext(videoState)) {
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        return _handlePlayerBackPress();
+      }
       return _handlePlayerMenuPress(videoState);
     }
     if (_isSettingsPanelVisible) {
@@ -826,7 +907,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
     if (isPlayerPlaybackContext &&
         (command == NipaplayLargeScreenInputCommand.toggleMenu ||
             command == NipaplayLargeScreenInputCommand.back)) {
-      _handlePlayerMenuPress(videoState);
+      _handlePlayerInputCommand(videoState, command);
       return;
     }
 
@@ -961,7 +1042,57 @@ class _NipaplayLargeScreenScaffoldLayoutState
 
   // ── 键盘输入 ──────────────────────────────────────────────
 
+  /// 内容区方向导航入口：KeyDown 立即移动；KeyRepeat 交给节拍器，
+  /// 按住方向键时把系统级重复合并为固定节拍，让高亮/滚动动画能推进。
+  bool _moveContentFocusForKeyEvent(
+      TraversalDirection direction, KeyEvent event) {
+    if (event is KeyRepeatEvent) {
+      _navRepeatCoalescer.request(() {
+        if (!mounted) {
+          return;
+        }
+        _moveContentFocus(direction);
+      });
+      return true;
+    }
+    _navRepeatCoalescer.cancel();
+    return _moveContentFocus(direction);
+  }
+
+  void _moveMenuFocusForKeyEvent(int delta, KeyEvent event) {
+    if (event is KeyRepeatEvent) {
+      _navRepeatCoalescer.request(() {
+        if (!mounted) {
+          return;
+        }
+        _moveMenuFocus(delta);
+      });
+      return;
+    }
+    _navRepeatCoalescer.cancel();
+    _moveMenuFocus(delta);
+  }
+
+  void _dispatchSettingsPanelNavigationForKeyEvent(
+      NipaplayLargeScreenSettingsPanelCommand command, KeyEvent event) {
+    if (event is KeyRepeatEvent) {
+      _navRepeatCoalescer.request(() {
+        if (!mounted) {
+          return;
+        }
+        _dispatchSettingsPanelCommand(command);
+      });
+      return;
+    }
+    _navRepeatCoalescer.cancel();
+    _dispatchSettingsPanelCommand(command);
+  }
+
   KeyEventResult _handleInputKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent && _arrowKeys.contains(event.logicalKey)) {
+      // 松开方向键：丢弃尚未执行的节拍移动，避免松手后多走一步。
+      _navRepeatCoalescer.cancel();
+    }
     final videoState = context.read<VideoPlayerState>();
     final isPlayerPlaybackContext = _isPlayerPlaybackContext(videoState);
     if (isPlayerPlaybackContext) {
@@ -975,10 +1106,19 @@ class _NipaplayLargeScreenScaffoldLayoutState
       return KeyEventResult.ignored;
     }
 
+    // 瞬时命令（开关菜单/返回/确认）只响应 KeyDown：按住不放时忽略
+    // 系统重复，避免菜单闪烁或重复触发激活。
+    if (event is KeyRepeatEvent &&
+        (command == NipaplayLargeScreenInputCommand.toggleMenu ||
+            command == NipaplayLargeScreenInputCommand.back ||
+            command == NipaplayLargeScreenInputCommand.activate)) {
+      return KeyEventResult.handled;
+    }
+
     if (isPlayerPlaybackContext &&
         (command == NipaplayLargeScreenInputCommand.toggleMenu ||
             command == NipaplayLargeScreenInputCommand.back)) {
-      return _handlePlayerMenuPress(videoState)
+      return _handlePlayerInputCommand(videoState, command)
           ? KeyEventResult.handled
           : KeyEventResult.ignored;
     }
@@ -994,23 +1134,27 @@ class _NipaplayLargeScreenScaffoldLayoutState
           _closeSettingsPanel();
           return KeyEventResult.handled;
         case NipaplayLargeScreenInputCommand.navigateUp:
-          _dispatchSettingsPanelCommand(
+          _dispatchSettingsPanelNavigationForKeyEvent(
             NipaplayLargeScreenSettingsPanelCommand.navigateUp,
+            event,
           );
           return KeyEventResult.handled;
         case NipaplayLargeScreenInputCommand.navigateDown:
-          _dispatchSettingsPanelCommand(
+          _dispatchSettingsPanelNavigationForKeyEvent(
             NipaplayLargeScreenSettingsPanelCommand.navigateDown,
+            event,
           );
           return KeyEventResult.handled;
         case NipaplayLargeScreenInputCommand.navigateLeft:
-          _dispatchSettingsPanelCommand(
+          _dispatchSettingsPanelNavigationForKeyEvent(
             NipaplayLargeScreenSettingsPanelCommand.navigateLeft,
+            event,
           );
           return KeyEventResult.handled;
         case NipaplayLargeScreenInputCommand.navigateRight:
-          _dispatchSettingsPanelCommand(
+          _dispatchSettingsPanelNavigationForKeyEvent(
             NipaplayLargeScreenSettingsPanelCommand.navigateRight,
+            event,
           );
           return KeyEventResult.handled;
         case NipaplayLargeScreenInputCommand.activate:
@@ -1057,7 +1201,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
         return KeyEventResult.ignored;
       case NipaplayLargeScreenInputCommand.navigateUp:
         if (_isTabPanelVisible) {
-          _moveMenuFocus(-1);
+          _moveMenuFocusForKeyEvent(-1, event);
           return KeyEventResult.handled;
         }
         if (isPlayerPlaybackContext && !videoState.showControls) {
@@ -1067,12 +1211,12 @@ class _NipaplayLargeScreenScaffoldLayoutState
         if (isPlayerPlaybackContext) {
           videoState.resetLargeScreenControlsAutoHideTimer();
         }
-        return _moveContentFocus(TraversalDirection.up)
+        return _moveContentFocusForKeyEvent(TraversalDirection.up, event)
             ? KeyEventResult.handled
             : KeyEventResult.ignored;
       case NipaplayLargeScreenInputCommand.navigateDown:
         if (_isTabPanelVisible) {
-          _moveMenuFocus(1);
+          _moveMenuFocusForKeyEvent(1, event);
           return KeyEventResult.handled;
         }
         if (isPlayerPlaybackContext && !videoState.showControls) {
@@ -1082,7 +1226,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
         if (isPlayerPlaybackContext) {
           videoState.resetLargeScreenControlsAutoHideTimer();
         }
-        return _moveContentFocus(TraversalDirection.down)
+        return _moveContentFocusForKeyEvent(TraversalDirection.down, event)
             ? KeyEventResult.handled
             : KeyEventResult.ignored;
       case NipaplayLargeScreenInputCommand.navigateLeft:
@@ -1096,7 +1240,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
         if (isPlayerPlaybackContext) {
           videoState.resetLargeScreenControlsAutoHideTimer();
         }
-        return _moveContentFocus(TraversalDirection.left)
+        return _moveContentFocusForKeyEvent(TraversalDirection.left, event)
             ? KeyEventResult.handled
             : KeyEventResult.ignored;
       case NipaplayLargeScreenInputCommand.navigateRight:
@@ -1110,7 +1254,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
         if (isPlayerPlaybackContext) {
           videoState.resetLargeScreenControlsAutoHideTimer();
         }
-        return _moveContentFocus(TraversalDirection.right)
+        return _moveContentFocusForKeyEvent(TraversalDirection.right, event)
             ? KeyEventResult.handled
             : KeyEventResult.ignored;
       case NipaplayLargeScreenInputCommand.activate:
@@ -1162,6 +1306,7 @@ class _NipaplayLargeScreenScaffoldLayoutState
               removeTop: true,
               removeBottom: true,
               child: NipaplayLargeScreenPlayerMenuScope(
+                onBackPressed: _handlePlayerBackPress,
                 onMenuPressed: () {
                   _handlePlayerMenuPress(context.read<VideoPlayerState>());
                 },
@@ -1211,16 +1356,9 @@ class _NipaplayLargeScreenScaffoldLayoutState
                 isDarkMode: widget.isDarkMode,
                 tabPage: widget.tabPage,
                 tabController: widget.tabController,
-                focusedIndex: _focusedMenuIndex,
+                focusedIndexListenable: _focusedMenuIndex,
                 commandNotifier: _tabPanelCommand,
-                onFocusedIndexChanged: (index) {
-                  if (_focusedMenuIndex == index) {
-                    return;
-                  }
-                  setState(() {
-                    _focusedMenuIndex = index;
-                  });
-                },
+                onFocusedIndexChanged: _setFocusedMenuIndex,
                 onTabActivated: _closeTabPanel,
                 onToggleLargeScreen:
                     globals.isTvOS ? null : widget.onToggleLargeScreen,
@@ -1243,25 +1381,18 @@ class _NipaplayLargeScreenScaffoldLayoutState
                 width: kNipaplayLargeScreenSettingsPanelWidth,
                 child: NipaplayLargeScreenSettingsPanel(
                   isDarkMode: widget.isDarkMode,
-                  focusedIndex: _focusedSettingsIndex,
+                  focusedIndexListenable: _focusedSettingsIndex,
                   commandNotifier: _settingsPanelCommand,
                   onFocusedIndexChanged: (index) {
-                    if (_focusedSettingsIndex == index) {
-                      return;
-                    }
-                    setState(() {
-                      _focusedSettingsIndex = _clampSettingsIndex(index);
-                    });
+                    _setFocusedSettingsIndex(_clampSettingsIndex(index));
                   },
                   onEntryCountChanged: (count) {
                     if (_settingsEntryCount == count) {
                       return;
                     }
-                    setState(() {
-                      _settingsEntryCount = count;
-                      _focusedSettingsIndex =
-                          _clampSettingsIndex(_focusedSettingsIndex);
-                    });
+                    _settingsEntryCount = count;
+                    _setFocusedSettingsIndex(
+                        _clampSettingsIndex(_focusedSettingsIndex.value));
                   },
                   onRequestClose: _closeSettingsPanel,
                 ),
@@ -1344,12 +1475,22 @@ class _NipaplayLargeScreenScaffoldLayoutState
         ],
       ),
     );
-    return NipaplayTvOSPopRouteGuard(
-      // Only Siri Remote MENU uses root popRoute to open the menu.
-      // Android BACK must retain its normal navigation/exit behavior.
-      enabled: globals.isTvOS,
-      onRootPopRoute: _handleTvOSRootPopRoute,
-      child: content,
+    // System/predictive BACK bypasses Focus; the root route must advertise
+    // that playback and open panels consume it instead of exiting Android.
+    final handlesAndroidBack = defaultTargetPlatform == TargetPlatform.android &&
+        (usePlayerContextPanel || showPanelBackdrop || _isExitingPlayback);
+    return PopScope<Object?>(
+      canPop: !handlesAndroidBack,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop && handlesAndroidBack) {
+          _handleRootPopRoute();
+        }
+      },
+      child: NipaplayTvOSPopRouteGuard(
+        enabled: globals.isTvOS,
+        onRootPopRoute: _handleRootPopRoute,
+        child: content,
+      ),
     );
   }
 }

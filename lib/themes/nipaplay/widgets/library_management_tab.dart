@@ -2056,8 +2056,10 @@ class _LibraryManagementTabState extends State<LibraryManagementTab> {
     final scanService = isRemoteMode ? null : Provider.of<ScanService>(context);
     final sharedProvider =
         isRemoteMode ? Provider.of<SharedRemoteLibraryProvider>(context) : null;
-    final appearanceProvider = Provider.of<AppearanceSettingsProvider>(context);
-    final bool enableBlur = appearanceProvider.enableWidgetBlurEffect;
+    // 外观设置里只有模糊开关影响本页；select 收窄后主题内其它字段
+    // 变化不再整页重建。
+    final bool enableBlur = context.select<AppearanceSettingsProvider, bool>(
+        (provider) => provider.enableWidgetBlurEffect);
     final bool isDark = Theme.of(context).brightness == Brightness.dark;
     final Color scanMessageColor = isDark ? Colors.white70 : Colors.black54;
     final Color scanProgressBackground =
@@ -2796,7 +2798,12 @@ class _LibraryManagementTabState extends State<LibraryManagementTab> {
       return entry.name.toLowerCase().contains(query) ||
           entry.path.toLowerCase().contains(query);
     });
-    final watchHistory = Provider.of<WatchHistoryProvider>(context);
+    // 只用于条目副标题的观看进度文本；listen:true 会让本页在播放期间
+    // 随 WatchHistoryProvider 的 3 秒进度保存整页重建（页缓存常驻播放器
+    // 底下）。退出播放时祖先应响应 hasVideo 变化带动本页重建，数据不会
+    // 长期过期。
+    final watchHistory =
+        Provider.of<WatchHistoryProvider>(context, listen: false);
 
     return [
       for (final entry in entries)

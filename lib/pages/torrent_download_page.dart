@@ -147,6 +147,13 @@ class _TorrentDownloadPageState extends State<TorrentDownloadPage>
     try {
       final tasks = await _service.listTasks();
       if (!mounted) return;
+      // 5 秒一次的静默刷新：任务内容没变（速度 0、进度未推进）时跳过
+      // setState 与摘要加载，避免空闲时每 5 秒重建整页。自动扫描检查
+      // 仍保留——内部按任务键去重，重复调用代价低且保证补扫语义不变。
+      if (_tasksEquivalent(_tasks, tasks)) {
+        unawaited(_handleAutoScanCompletedTasks(tasks, silent: silent));
+        return;
+      }
       setState(() {
         _tasks = tasks;
       });
@@ -156,6 +163,40 @@ class _TorrentDownloadPageState extends State<TorrentDownloadPage>
       if (!mounted || silent) return;
       _showTorrentMessage('刷新下载列表失败: $e');
     }
+  }
+
+  /// 判断两次拉取的任务列表是否对 UI 等价。
+  ///
+  /// [TorrentTask] 是每次刷新重建的实例，不能直接比较引用；逐字段比较
+  /// 卡片实际显示的状态（进度/速度/错误/文件包含开关）。
+  static bool _tasksEquivalent(
+      List<TorrentTask> a, List<TorrentTask> b) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      final left = a[i];
+      final right = b[i];
+      if (left.id != right.id ||
+          left.state != right.state ||
+          left.progressBytes != right.progressBytes ||
+          left.uploadedBytes != right.uploadedBytes ||
+          left.totalBytes != right.totalBytes ||
+          left.finished != right.finished ||
+          left.downloadSpeedBytesPerSecond !=
+              right.downloadSpeedBytesPerSecond ||
+          left.uploadSpeedBytesPerSecond != right.uploadSpeedBytesPerSecond ||
+          left.error != right.error ||
+          left.files.length != right.files.length) {
+        return false;
+      }
+      for (var f = 0; f < left.files.length; f++) {
+        if (left.files[f].included != right.files[f].included ||
+            left.files[f].name != right.files[f].name) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   Future<void> _showAddMagnetDialog() async {

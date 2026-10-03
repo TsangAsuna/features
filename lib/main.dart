@@ -175,10 +175,17 @@ Alignment _resolveStartupWindowAlignment(
 void main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
   // Flutter defaults are 100 MiB / 1000 entries, which lets the poster wall
-  // alone consume ~100 MiB before playback starts. Cap it well below that:
-  // decoded posters are evicted and refetched from the disk cache cheaply.
-  PaintingBinding.instance.imageCache.maximumSizeBytes = 32 << 20;
-  PaintingBinding.instance.imageCache.maximumSize = 200;
+  // alone consume ~100 MiB before playback starts. Keep the low-memory
+  // surfaces (Android/Web/TV boxes) at 32 MiB per the low-end device budget
+  // (docs/LOW_END_DEVICE_PERFORMANCE.md); desktop/ohos get 64 MiB / 400
+  // entries so long poster-wall scrolls don't thrash re-decodes. Evicted
+  // images are refetched from the disk cache cheaply either way.
+  final bool constrainedMemorySurface =
+      kIsWeb || globals.isAndroidTv || globals.isTelevision;
+  PaintingBinding.instance.imageCache.maximumSizeBytes =
+      constrainedMemorySurface ? 32 << 20 : 64 << 20;
+  PaintingBinding.instance.imageCache.maximumSize =
+      constrainedMemorySurface ? 200 : 400;
   try {
     await FluentIconFontLoader.instance.ensureLoaded();
   } catch (error, stackTrace) {

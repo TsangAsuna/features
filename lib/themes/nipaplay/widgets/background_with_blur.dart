@@ -6,6 +6,7 @@ import 'package:glassmorphism/glassmorphism.dart';
 import 'package:nipaplay/providers/settings_provider.dart';
 import 'package:nipaplay/providers/theme_background_reveal_provider.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/background_image_compositor.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/tv_safe_blur.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/utils/theme_notifier.dart';
 import 'package:provider/provider.dart';
@@ -50,31 +51,40 @@ class BackgroundBackdrop extends StatelessWidget {
             ),
             if (settingsProvider.isBlurEnabled)
               Positioned.fill(
-                child: GlassmorphicContainer(
-                  blur: settingsProvider.blurPower,
-                  alignment: Alignment.center,
-                  borderRadius: 0,
-                  border: 0,
-                  padding: const EdgeInsets.all(20),
-                  height: double.infinity,
-                  width: double.infinity,
-                  linearGradient: LinearGradient(
-                    colors: [
-                      const Color.fromARGB(255, 0, 0, 0).withValues(alpha: 0),
-                      const Color.fromARGB(255, 0, 0, 0).withValues(alpha: 0),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderGradient: LinearGradient(
-                    colors: [
-                      const Color.fromARGB(255, 0, 0, 0).withValues(alpha: 0.3),
-                      const Color.fromARGB(255, 0, 0, 0).withValues(alpha: 0.1),
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
+                // 全屏毛玻璃底层：渐变与边框都完全透明，视觉上只贡献
+                // blur 本身。电视上整帧重捕获/重模糊不可负担，直接跳过
+                // （渐变透明，无视觉差异）。
+                child: shouldSkipTvBackdropBlur
+                    ? const SizedBox.expand()
+                    : GlassmorphicContainer(
+                        blur: settingsProvider.blurPower,
+                        alignment: Alignment.center,
+                        borderRadius: 0,
+                        border: 0,
+                        padding: const EdgeInsets.all(20),
+                        height: double.infinity,
+                        width: double.infinity,
+                        linearGradient: LinearGradient(
+                          colors: [
+                            const Color.fromARGB(255, 0, 0, 0)
+                                .withValues(alpha: 0),
+                            const Color.fromARGB(255, 0, 0, 0)
+                                .withValues(alpha: 0),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        borderGradient: LinearGradient(
+                          colors: [
+                            const Color.fromARGB(255, 0, 0, 0)
+                                .withValues(alpha: 0.3),
+                            const Color.fromARGB(255, 0, 0, 0)
+                                .withValues(alpha: 0.1),
+                          ],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                      ),
               ),
             if (revealProvider.isActive)
               Positioned.fill(

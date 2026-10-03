@@ -1,11 +1,13 @@
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:nipaplay/player_abstraction/player_factory.dart';
 import 'package:nipaplay/player_menu/player_menu_definition_builder.dart';
 import 'package:nipaplay/player_menu/player_menu_models.dart';
 import 'package:nipaplay/services/large_screen_ui_sfx_service.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_input_controls.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/large_screen_key_repeat_coalescer.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_player_menu_components.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_player_menu_pane_host.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/tv_safe_blur.dart';
@@ -48,9 +50,21 @@ class _NipaplayLargeScreenPlayerMenuPanelState
   int _focusedTabIndex = 0;
   bool _isContentFocused = false;
   FocusNode? _lastContentFocusNode;
+  // 方向键 KeyRepeat 节拍器：按住方向键在标签列/内容区连续导航时，
+  // 把系统级重复合并为固定节拍，避免高亮与滚动动画被逐事件重置。
+  final NipaplayKeyRepeatCoalescer _repeatCoalescer =
+      NipaplayKeyRepeatCoalescer();
+
+  static final Set<LogicalKeyboardKey> _arrowKeys = {
+    LogicalKeyboardKey.arrowUp,
+    LogicalKeyboardKey.arrowDown,
+    LogicalKeyboardKey.arrowLeft,
+    LogicalKeyboardKey.arrowRight,
+  };
 
   @override
   void dispose() {
+    _repeatCoalescer.dispose();
     _panelFocusNode.dispose();
     _contentFocusScope.dispose();
     _tabScrollController.dispose();
@@ -303,9 +317,20 @@ class _NipaplayLargeScreenPlayerMenuPanelState
   }
 
   KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent && _arrowKeys.contains(event.logicalKey)) {
+      // 松开方向键：丢弃尚未执行的节拍移动，避免松手后多走一步。
+      _repeatCoalescer.cancel();
+    }
     final command = NipaplayLargeScreenInputControls.fromKeyEvent(event);
     if (command == null) {
       return KeyEventResult.ignored;
+    }
+    // 瞬时命令（关菜单/确认）只响应 KeyDown，忽略系统重复。
+    if (event is KeyRepeatEvent &&
+        (command == NipaplayLargeScreenInputCommand.toggleMenu ||
+            command == NipaplayLargeScreenInputCommand.back ||
+            command == NipaplayLargeScreenInputCommand.activate)) {
+      return KeyEventResult.handled;
     }
     switch (command) {
       case NipaplayLargeScreenInputCommand.toggleMenu:
@@ -314,16 +339,16 @@ class _NipaplayLargeScreenPlayerMenuPanelState
         return KeyEventResult.handled;
       case NipaplayLargeScreenInputCommand.navigateUp:
         if (_isContentFocused) {
-          _moveContentVerticalFocus(reverse: true);
+          _moveContentVerticalFocusCoalesced(reverse: true, event: event);
         } else {
-          _moveTabFocus(-1);
+          _moveTabFocusCoalesced(-1, event);
         }
         return KeyEventResult.handled;
       case NipaplayLargeScreenInputCommand.navigateDown:
         if (_isContentFocused) {
-          _moveContentVerticalFocus(reverse: false);
+          _moveContentVerticalFocusCoalesced(reverse: false, event: event);
         } else {
-          _moveTabFocus(1);
+          _moveTabFocusCoalesced(1, event);
         }
         return KeyEventResult.handled;
       case NipaplayLargeScreenInputCommand.navigateLeft:
@@ -333,7 +358,7 @@ class _NipaplayLargeScreenPlayerMenuPanelState
         return KeyEventResult.handled;
       case NipaplayLargeScreenInputCommand.navigateRight:
         if (_isContentFocused) {
-          _moveContentFocus(TraversalDirection.right);
+          _moveContentFocusCoalesced(TraversalDirection.right, event);
         } else {
           _setContentFocused(true);
         }
@@ -349,6 +374,50 @@ class _NipaplayLargeScreenPlayerMenuPanelState
       case NipaplayLargeScreenInputCommand.nextTab:
         return KeyEventResult.ignored;
     }
+  }
+
+  void _moveTabFocusCoalesced(int delta, KeyEvent event) {
+    if (event is KeyRepeatEvent) {
+      _repeatCoalescer.request(() {
+        if (!mounted) {
+          return;
+        }
+        _moveTabFocus(delta);
+      });
+      return;
+    }
+    _repeatCoalescer.cancel();
+    _moveTabFocus(delta);
+  }
+
+  void _moveContentVerticalFocusCoalesced(
+      {required bool reverse, required KeyEvent event}) {
+    if (event is KeyRepeatEvent) {
+      _repeatCoalescer.request(() {
+        if (!mounted) {
+          return;
+        }
+        _moveContentVerticalFocus(reverse: reverse);
+      });
+      return;
+    }
+    _repeatCoalescer.cancel();
+    _moveContentVerticalFocus(reverse: reverse);
+  }
+
+  void _moveContentFocusCoalesced(TraversalDirection direction,
+      KeyEvent event) {
+    if (event is KeyRepeatEvent) {
+      _repeatCoalescer.request(() {
+        if (!mounted) {
+          return;
+        }
+        _moveContentFocus(direction);
+      });
+      return;
+    }
+    _repeatCoalescer.cancel();
+    _moveContentFocus(direction);
   }
 
   void _moveTabFocus(int delta) {
