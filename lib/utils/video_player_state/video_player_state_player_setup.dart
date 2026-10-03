@@ -319,7 +319,8 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       try {
         if (MediaSourceUtils.isNewWebDavPath(videoPath)) {
           resolvedActualPlayUrl =
-              MediaSourceUtils.resolveWebDavPathToUrl(videoPath);
+              await MediaSourceUtils.resolveWebDavPathToUrlInitialized(
+                  videoPath);
         } else if (MediaSourceUtils.isNewSmbPath(videoPath)) {
           resolvedActualPlayUrl =
               MediaSourceUtils.resolveSmbPathToUrl(videoPath);

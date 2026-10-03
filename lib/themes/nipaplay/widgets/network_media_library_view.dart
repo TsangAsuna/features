@@ -838,6 +838,9 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
         ? Colors.white
         : const Color(0xFF151820);
     final imageUrl = _getNetworkMediaImageUrl(item, width: 460);
+    final fallbackPoster = item.isFolder
+        ? _buildLargeScreenFolderPoster(textColor)
+        : _buildLargeScreenFallbackPoster(textColor);
 
     return NipaplayLargeScreenFocusableAction(
       autofocus: autofocus,
@@ -860,15 +863,19 @@ class _NetworkMediaLibraryViewState extends State<NetworkMediaLibraryView>
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (item.isFolder)
-                    _buildLargeScreenFolderPoster(textColor)
-                  else
+                  if (imageUrl.isNotEmpty)
                     CachedNetworkImageWidget(
                       imageUrl: imageUrl,
                       fit: BoxFit.cover,
-                      errorBuilder: (_, __) =>
-                          _buildLargeScreenFallbackPoster(textColor),
-                    ),
+                      // 封面 URL 本身就是 460 宽的缩放版本；不限制解码尺寸时
+                      // 会按原始分辨率整图解码（每张可达数 MB），在 32MB 的
+                      // 电视字节预算下反复淘汰重解码，封面墙会加载到一半停住。
+                      memCacheWidth: 460,
+                      memCacheHeight: 690,
+                      errorBuilder: (_, __) => fallbackPoster,
+                    )
+                  else
+                    fallbackPoster,
                   Positioned.fill(
                     child: DecoratedBox(
                       decoration: BoxDecoration(
