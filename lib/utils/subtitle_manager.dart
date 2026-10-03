@@ -974,18 +974,22 @@ class SubtitleManager extends ChangeNotifier {
   /// 内核里实际加载的外挂轨文件（可能是编码修复后的转码副本，不一定是
   /// 原始路径）；平移副本以它为基底，Δ=0 回落也回到它。
   String? _activeKernelExternalSubtitlePath;
-  Timer? _marginShiftDebounce;
+  // 节流热重载：首动立即生效（跟手），拖动中每 ~200ms 跟随最新值，
+  // 停手后节流窗口兜底一次精确值。纯防抖会让滑块必须停手才生效。
   int _pendingMarginShiftDelta = 0;
+  int _lastMarginShiftFireAtMs = 0;
+  int _marginShiftSeq = 0;
+  Future<void>? _marginShiftInFlight;
+  Timer? _marginShiftTrailingTimer;
   String? _marginShiftBasePath;
   int _activeMarginShiftDelta = 0;
-  static const Duration _marginShiftDebounceDuration = Duration(
-    milliseconds: 400,
-  );
+  static const int _marginShiftThrottleMs = 200;
 
   /// 外挂 ASS 的位置滑块通道：按 Δ 逐样式加性平移 MarginV 生成副本并
-  /// 热重载内核轨（防抖合并拖动）。单值 force-style 会抹掉双语两行的
-  /// 边距差（跨层事件无碰撞堆叠、直接重合），sub-pos 是按比例插值收拢
-  /// ——只有加性平移保排版。
+  /// 热重载内核轨。单值 force-style 会抹掉双语两行的边距差（跨层事件
+  /// 无碰撞堆叠、直接重合），sub-pos 是按比例插值收拢——只有加性平移
+  /// 保排版。热重载按 leading+trailing 节流：首动立即生效、拖动中周期
+  /// 跟随最新值、停手后窗口兜底一次，中间值被乱序跳过不排队。
   void requestExternalAssMarginShift(int deltaY) {
     if (kIsWeb || !_isMediaKitKernel()) return;
     if (!isKernelRenderedExternalAssActive()) return;
@@ -996,9 +1000,32 @@ class SubtitleManager extends ChangeNotifier {
       return;
     }
     _pendingMarginShiftDelta = deltaY;
-    _marginShiftDebounce?.cancel();
-    _marginShiftDebounce = Timer(_marginShiftDebounceDuration, () {
-      unawaited(_applyExternalAssMarginShift(_pendingMarginShiftDelta));
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final sinceLast = nowMs - _lastMarginShiftFireAtMs;
+    if (sinceLast >= _marginShiftThrottleMs) {
+      _fireMarginShift(deltaY);
+      return;
+    }
+    // 窗口内：挂一个兜底触发（单实例，用最新值），停手后也能精确落位。
+    final remaining = _marginShiftThrottleMs - sinceLast;
+    _marginShiftTrailingTimer ??= Timer(
+      Duration(milliseconds: remaining),
+      () {
+        _marginShiftTrailingTimer = null;
+        _fireMarginShift(_pendingMarginShiftDelta);
+      },
+    );
+  }
+
+  void _fireMarginShift(int deltaY) {
+    _lastMarginShiftFireAtMs = DateTime.now().millisecondsSinceEpoch;
+    final seq = ++_marginShiftSeq;
+    final previous = _marginShiftInFlight ?? Future<void>.value();
+    _marginShiftInFlight = previous.then((_) async {
+      // 排队期间来了更新的值：跳过中间值，只应用最新请求。
+      if (seq != _marginShiftSeq) return;
+      if (_activeKernelExternalSubtitlePath == null) return;
+      await _applyExternalAssMarginShift(deltaY);
     });
   }
 
@@ -1006,6 +1033,10 @@ class SubtitleManager extends ChangeNotifier {
     final base = _activeKernelExternalSubtitlePath ??
         getActiveExternalSubtitlePath();
     if (base == null || base.isEmpty) return;
+    // 幂等：兜底触发与拖动跟随可能落在同一 Δ 上，避免重复挂轨道。
+    if (deltaY == _activeMarginShiftDelta && _marginShiftBasePath == base) {
+      return;
+    }
     try {
       if (deltaY == 0) {
         if (_activeMarginShiftDelta != 0) {
@@ -1050,11 +1081,13 @@ class SubtitleManager extends ChangeNotifier {
   }
 
   /// 清空平移状态（切集/清除外挂时调用）；不主动回载——内核轨随后会被
-  /// 清理或重新挂载。
+  /// 清理或重新挂载。复位同时作废排队中的节流触发与在途重载。
   void resetExternalAssMarginShift() {
-    _marginShiftDebounce?.cancel();
-    _marginShiftDebounce = null;
+    _marginShiftTrailingTimer?.cancel();
+    _marginShiftTrailingTimer = null;
+    _marginShiftSeq++; // 在途/排队的应用按序号作废
     _pendingMarginShiftDelta = 0;
+    _lastMarginShiftFireAtMs = 0;
     _activeMarginShiftDelta = 0;
     _marginShiftBasePath = null;
     _activeKernelExternalSubtitlePath = null;
