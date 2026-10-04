@@ -1063,6 +1063,39 @@ class WatchHistoryDatabase {
     }
   }
 
+  // 根据文件路径集合批量删除历史记录
+  Future<int> deleteHistoryByFilePaths(List<String> filePaths) async {
+    if (filePaths.isEmpty) return 0;
+    if (kIsWeb) {
+      await _ensureWebStoreLoaded();
+      var removed = 0;
+      for (final path in filePaths) {
+        if (_webStore.remove(path) != null) removed++;
+      }
+      _scheduleWebStorePersist();
+      return removed;
+    }
+    final db = await database;
+
+    try {
+      // SQLite 的 IN 参数上限默认 999，分批避免超限。
+      var deleted = 0;
+      for (var start = 0; start < filePaths.length; start += 500) {
+        final batch = filePaths.skip(start).take(500).toList();
+        final placeholders = List.filled(batch.length, '?').join(',');
+        deleted += await db.delete(
+          'watch_history',
+          where: 'file_path IN ($placeholders)',
+          whereArgs: batch,
+        );
+      }
+      return deleted;
+    } catch (e) {
+      debugPrint('批量删除观看历史失败: $e');
+      return 0;
+    }
+  }
+
   // 根据动画ID删除历史记录
   Future<int> deleteHistoryByAnimeId(int animeId) async {
     if (kIsWeb) {

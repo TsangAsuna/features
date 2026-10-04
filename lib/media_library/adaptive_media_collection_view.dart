@@ -26,7 +26,10 @@ import 'package:nipaplay/themes/cupertino/widgets/cupertino_anime_card.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_media_search_toolbar.dart';
 import 'package:nipaplay/themes/cupertino/widgets/cupertino_bottom_sheet.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/anime_card.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_dialog.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/blur_snackbar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/horizontal_anime_card.dart';
+import 'package:nipaplay/themes/nipaplay/widgets/hover_scale_text_button.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/local_library_control_bar.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_mode_scope.dart';
 import 'package:nipaplay/themes/nipaplay/widgets/large_screen_page_scaffold.dart';
@@ -417,6 +420,7 @@ class _AdaptiveMediaCollectionViewState
   MediaCollectionSort _sort = MediaCollectionSort.comprehensive;
   int _sortChangeRevision = 0;
   bool _isSyncing = false;
+  bool _isClearingRecords = false;
   bool _isLoadingWebCollection = false;
   bool _requestedHistoryLoad = false;
   List<WatchHistoryItem> _webCollectionItems = const <WatchHistoryItem>[];
@@ -539,6 +543,10 @@ class _AdaptiveMediaCollectionViewState
               onSearchChanged: (value) => setState(() => _query = value),
               onSortChanged: _setSort,
               onSync: _isSyncing ? null : _sync,
+              onClearRecords:
+                  widget.source == UnifiedMediaLibrarySource.webdav
+                      ? _clearRecords
+                      : null,
             ),
             material.Expanded(
               child: AdaptiveMediaCollectionItems(
@@ -737,6 +745,60 @@ class _AdaptiveMediaCollectionViewState
     }
   }
 
+  /// 一键清除当前媒体库来源的全部观看记录（远程服务器上的文件不受影响）。
+  /// 破坏性操作：先经 BlurDialog 二次确认防误触。
+  Future<void> _clearRecords() async {
+    if (_isClearingRecords) return;
+    final provider = context.read<WatchHistoryProvider>();
+    final recordCount = provider.history
+        .where((item) => mediaLibraryItemMatchesSource(item, widget.source))
+        .length;
+    if (!mounted) return;
+    if (recordCount == 0) {
+      BlurSnackBar.show(context, '没有可清除的$_sourceLabel记录');
+      return;
+    }
+    final isDark = material.Theme.of(context).brightness == material.Brightness.dark;
+    final confirm = await BlurDialog.show<bool>(
+      context: context,
+      title: '清除$_sourceLabel记录',
+      content:
+          '将删除$_sourceLabel中的全部 $recordCount 条观看记录。\n\n• 不会删除服务器上的视频文件\n• 相关的观看进度将无法恢复\n• 此操作不可撤销\n\n确定要清除全部记录吗？',
+      actions: <material.Widget>[
+        HoverScaleTextButton(
+          child: material.Text(
+            '取消',
+            style: material.TextStyle(
+              color: isDark ? material.Colors.white70 : material.Colors.black54,
+            ),
+          ),
+          onPressed: () => material.Navigator.of(context).pop(false),
+        ),
+        HoverScaleTextButton(
+          child: const material.Text(
+            '清除',
+            style: material.TextStyle(color: material.Colors.redAccent),
+          ),
+          onPressed: () => material.Navigator.of(context).pop(true),
+        ),
+      ],
+    );
+    if (confirm != true || !mounted) return;
+    setState(() => _isClearingRecords = true);
+    try {
+      final removed = await provider.removeHistoriesWhere(
+        (item) => mediaLibraryItemMatchesSource(item, widget.source),
+      );
+      if (!mounted) return;
+      BlurSnackBar.show(
+        context,
+        removed > 0 ? '已清除 $removed 条记录' : '没有可清除的$_sourceLabel记录',
+      );
+    } finally {
+      if (mounted) setState(() => _isClearingRecords = false);
+    }
+  }
+
   Future<void> _loadWebCollection({bool showLoading = true}) async {
     if (!kIsWeb || widget.source != UnifiedMediaLibrarySource.local) return;
     if (showLoading && mounted) {
@@ -907,6 +969,7 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
     required this.onSearchChanged,
     required this.onSortChanged,
     required this.onSync,
+    this.onClearRecords,
   });
 
   final String sourceLabel;
@@ -916,6 +979,7 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
   final material.ValueChanged<String> onSearchChanged;
   final material.ValueChanged<MediaCollectionSort> onSortChanged;
   final material.VoidCallback? onSync;
+  final material.VoidCallback? onClearRecords;
 
   @override
   material.Widget build(material.BuildContext context) {
@@ -928,6 +992,7 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
         onSearchChanged: onSearchChanged,
         onSortChanged: onSortChanged,
         onSync: onSync,
+        onClearRecords: onClearRecords,
       );
     }
     if (AppDisplaySurfaceScope.of(context) == AppDisplaySurface.phone) {
@@ -941,6 +1006,12 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
             icon: cupertino.CupertinoIcons.sort_down,
             onPressed: () => _showPhoneSort(context),
           ),
+          if (onClearRecords != null)
+            CupertinoMediaSearchToolbarAction(
+              label: '清除记录',
+              icon: cupertino.CupertinoIcons.delete,
+              onPressed: onClearRecords,
+            ),
           CupertinoMediaSearchToolbarAction(
             label: isSyncing ? '同步中' : '同步$sourceLabel',
             icon: cupertino.CupertinoIcons.refresh,
@@ -959,6 +1030,14 @@ class AdaptiveMediaCollectionControlBar extends material.StatelessWidget {
       onSearchChanged: onSearchChanged,
       onSortChanged: (value) => onSortChanged(_fromLocalSortType(value)),
       trailingActions: [
+        if (onClearRecords != null)
+          LocalLibraryActionControl(
+            label: '清除记录',
+            desktopIcon: material.Icons.delete_sweep_outlined,
+            phoneIcon: cupertino.CupertinoIcons.delete,
+            onPressed: onClearRecords,
+            isDestructive: true,
+          ),
         LocalLibraryActionControl(
           label: isSyncing ? '同步中' : '同步$sourceLabel',
           desktopIcon: material.Icons.sync,
@@ -1028,6 +1107,7 @@ class _TelevisionMediaCollectionControlBar extends material.StatelessWidget {
     required this.onSearchChanged,
     required this.onSortChanged,
     required this.onSync,
+    this.onClearRecords,
   });
 
   final String sourceLabel;
@@ -1037,6 +1117,7 @@ class _TelevisionMediaCollectionControlBar extends material.StatelessWidget {
   final material.ValueChanged<String> onSearchChanged;
   final material.ValueChanged<MediaCollectionSort> onSortChanged;
   final material.VoidCallback? onSync;
+  final material.VoidCallback? onClearRecords;
 
   @override
   material.Widget build(material.BuildContext context) {
@@ -1081,6 +1162,14 @@ class _TelevisionMediaCollectionControlBar extends material.StatelessWidget {
               tooltip: '切换媒体库排序方式',
             ),
             const material.SizedBox(width: 10),
+            if (onClearRecords != null) ...[
+              NipaplayLargeScreenActionButton(
+                icon: material.Icons.delete_sweep_rounded,
+                label: '清除记录',
+                onPressed: onClearRecords,
+              ),
+              const material.SizedBox(width: 10),
+            ],
             NipaplayLargeScreenActionButton(
               icon: material.Icons.sync_rounded,
               label: isSyncing ? '同步中' : '同步',

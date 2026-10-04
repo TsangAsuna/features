@@ -430,6 +430,23 @@ class WatchHistoryProvider extends ChangeNotifier {
     }
   }
 
+  // 按条件批量删除历史记录，返回实际删除的条数。
+  // 供媒体库按来源（WebDAV/SMB/本地）一键清除记录使用。
+  Future<int> removeHistoriesWhere(
+    bool Function(WatchHistoryItem item) test,
+  ) async {
+    final paths = _history.where(test).map((item) => item.filePath).toList();
+    if (paths.isEmpty) return 0;
+    final removed = await _database.deleteHistoryByFilePaths(paths);
+    if (removed > 0) {
+      final removedSet = paths.toSet();
+      _history.removeWhere((item) => removedSet.contains(item.filePath));
+      notifyListeners();
+      _scheduleIncrementalSyncAfterChange();
+    }
+    return removed;
+  }
+
   // 清空所有历史记录
   Future<void> clearAllHistory() async {
     await _database.clearAllHistory();
