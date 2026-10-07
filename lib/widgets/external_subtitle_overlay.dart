@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:io' as io;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:provider/provider.dart';
@@ -626,21 +629,32 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
   void _showSubtitleSettingsPanel(
       BuildContext context, VideoPlayerState videoState, String path) {
     // 字体列表只扫描一次（面板存续期间复用同一个 Future）
-    final fontListFuture = _listSubtitleFontNames(videoState);
+    Future<List<String>>? fontListFuture;
     // 历史缓存/远程下载的字体可能从未注册进引擎，打开面板时补注册
     unawaited(videoState.ensureSelectedSubtitleFontsRegistered());
+    final previewValue =
+        ValueNotifier<double>(videoState.pathSubtitleDelaySeconds(path));
+    final delayController = TextEditingController(
+      text: _formatDelayInputText(videoState.pathSubtitleDelaySeconds(path)),
+    );
+    final delayFocusNode = FocusNode();
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: const Color(0xF0101010),
       barrierColor: Colors.black54,
       isScrollControlled: true,
       builder: (sheetContext) {
-        final previewValue =
-            ValueNotifier<double>(videoState.pathSubtitleDelaySeconds(path));
-        final delayController = TextEditingController(
-          text:
-              _formatDelayInputText(videoState.pathSubtitleDelaySeconds(path)),
-        );
+        // 首次点击输入框光标默认停在句首且不闪烁，第二次点击才出现在末
+        // 端（用户反馈）：聚焦后显式把光标移到文本末尾并保持可见。
+        delayFocusNode.addListener(() {
+          if (!delayFocusNode.hasFocus) return;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!delayFocusNode.hasFocus) return;
+            delayController.selection =
+                TextSelection.collapsed(
+                    offset: delayController.text.length);
+          });
+        });
         void applyValue(double value) {
           videoState.setPathSubtitleDelaySeconds(path, value);
           previewValue.value = value;
@@ -668,11 +682,10 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
           Color(0xFFF48FB1),
           Color(0xFFB39DDB),
         ];
-        // 键盘弹出时把整块内容抬到键盘上方：底部内边距 = 键盘高度
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(sheetContext).viewInsets.bottom,
-          ),
+        // 键盘避让交给 _SheetKeyboardAvoider：viewInsets 依赖隔离在该
+        // 小部件里，键盘动画逐帧只重建它，不重建整块面板内容（点击输入
+        // 框时键盘弹出过程的卡顿来源，用户反馈）。
+        return _SheetKeyboardAvoider(
           child: SafeArea(
             child: SingleChildScrollView(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
@@ -715,6 +728,9 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
                       Expanded(
                         child: TextField(
                           controller: delayController,
+                          focusNode: delayFocusNode,
+                          cursorColor: Colors.amber,
+                          showCursor: true,
                           keyboardType: const TextInputType.numberWithOptions(
                               signed: true, decimal: true),
                           style: const TextStyle(
@@ -778,57 +794,101 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
                   Text('字体（可多选）',
                       style: TextStyle(color: Colors.white70, fontSize: 13)),
                   const SizedBox(height: 6),
-                  Consumer<VideoPlayerState>(
-                    builder: (context, vs, _) {
-                      return FutureBuilder<List<String>>(
-                        future: fontListFuture,
-                        builder: (context, snapshot) {
-                          final fonts = snapshot.data ?? <String>[];
-                          final current = vs.externalSubtitleFontName;
-                          final selected = current
-                              .split(',')
-                              .map((e) => e.trim())
-                              .where((e) => e.isNotEmpty)
-                              .toSet();
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Wrap(
-                                spacing: 8,
-                                runSpacing: 8,
+                  StatefulBuilder(
+                    builder: (sheetContext, setSheetState) {
+                      fontListFuture ??= videoState.listSubtitleFonts();
+                      void refreshFonts() {
+                        if (!sheetContext.mounted) return;
+                        setSheetState(() {
+                          fontListFuture = videoState.listSubtitleFonts();
+                        });
+                      }
+
+                      return Consumer<VideoPlayerState>(
+                        builder: (context, vs, _) {
+                          return FutureBuilder<List<String>>(
+                            future: fontListFuture,
+                            builder: (context, snapshot) {
+                              final fonts =
+                                  snapshot.data ?? const <String>[];
+                              final current = vs.externalSubtitleFontName;
+                              final selected = current
+                                  .split(',')
+                                  .map((e) => e.trim())
+                                  .where((e) => e.isNotEmpty)
+                                  .toSet();
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  for (final f in fonts)
-                                    FilterChip(
-                                      label: Text(f,
-                                          style: const TextStyle(
-                                              fontSize: 12)),
-                                      selected: selected.contains(f),
-                                      onSelected: (sel) {
-                                        final next = sel
-                                            ? [...selected, f].join(',')
-                                            : selected
-                                                .where((e) => e != f)
-                                                .join(',');
-                                        videoState
-                                            .setExternalSubtitleFontName(
-                                                next);
-                                      },
-                                    ),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: [
+                                      for (final f in fonts)
+                                        FilterChip(
+                                          label: Text(f,
+                                              style: const TextStyle(
+                                                  fontSize: 12)),
+                                          selected: selected.contains(f),
+                                          onSelected: (sel) {
+                                            final next = sel
+                                                ? [...selected, f].join(',')
+                                                : selected
+                                                    .where((e) => e != f)
+                                                    .join(',');
+                                            videoState
+                                                .setExternalSubtitleFontName(
+                                                    next);
+                                          },
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: OutlinedButton.icon(
+                                          onPressed: () async {
+                                            await _showFontMultiSelectDialog(
+                                              context,
+                                              videoState,
+                                              fonts,
+                                              onFontsImported: refreshFonts,
+                                            );
+                                            refreshFonts();
+                                          },
+                                          icon: const Icon(
+                                              Icons.font_download,
+                                              size: 16,
+                                              color: Colors.white70),
+                                          label: const Text('选择字体',
+                                              style: TextStyle(
+                                                  color: Colors.white70,
+                                                  fontSize: 13)),
+                                          style: _sheetButtonStyle(),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: OutlinedButton.icon(
+                                          onPressed: () =>
+                                              _importExternalSheetFonts(
+                                                  videoState, refreshFonts),
+                                          icon: const Icon(Icons.file_open,
+                                              size: 16,
+                                              color: Colors.white70),
+                                          label: const Text('导入字体',
+                                              style: TextStyle(
+                                                  color: Colors.white70,
+                                                  fontSize: 13)),
+                                          style: _sheetButtonStyle(),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ],
-                              ),
-                              const SizedBox(height: 8),
-                              OutlinedButton.icon(
-                                onPressed: () => _showFontMultiSelectDialog(
-                                    context, videoState, fonts),
-                                icon: const Icon(Icons.font_download,
-                                    size: 16, color: Colors.white70),
-                                label: const Text('选择字体',
-                                    style: TextStyle(
-                                        color: Colors.white70,
-                                        fontSize: 13)),
-                                style: _sheetButtonStyle(),
-                              ),
-                            ],
+                              );
+                            },
                           );
                         },
                       );
@@ -886,6 +946,8 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
         );
       },
     ).whenComplete(() {
+      delayFocusNode.dispose();
+      delayController.dispose();
       // 面板关闭（确认/取消/点外部）即收框：设置已实时应用，留着框只会
       // 在字幕空隙期变成无法交互的孤框。
       if (mounted && _editingPath == path) {
@@ -909,56 +971,81 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
 
   /// 字体多选对话框（复选列表，勾选即时生效）：给 TV 遥控一个可焦点遍
   /// 历的大目标入口——FilterChip 小目标在遥控上难命中（用户反馈）。
+  /// 导入逻辑与字幕设置菜单一致（移动端多选字体文件 / 桌面端选目录）。
   Future<void> _showFontMultiSelectDialog(
     BuildContext context,
     VideoPlayerState videoState,
-    List<String> fonts,
-  ) async {
+    List<String> fonts, {
+    required VoidCallback onFontsImported,
+  }) async {
     final selected = videoState.externalSubtitleFontName
         .split(',')
         .map((e) => e.trim())
         .where((e) => e.isNotEmpty)
         .toSet();
+    Future<List<String>>? activeFonts;
     await showDialog<void>(
       context: context,
       builder: (dialogContext) {
         return StatefulBuilder(
           builder: (dialogContext, setDialogState) {
+            activeFonts ??= Future<List<String>>.value(fonts);
             return AlertDialog(
               title: const Text('选择字体（可多选）'),
               content: SizedBox(
                 width: 320,
                 height: 380,
-                child: fonts.isEmpty
-                    ? const Center(
-                        child: Text('未找到可用字体',
-                            style: TextStyle(color: Colors.white54)))
-                    : ListView(
-                        children: [
-                          for (var i = 0; i < fonts.length; i++)
-                            CheckboxListTile(
-                              autofocus: i == 0 && globals.isTelevision,
-                              dense: true,
-                              value: selected.contains(fonts[i]),
-                              title: Text(fonts[i],
-                                  style: const TextStyle(
-                                      color: Colors.white, fontSize: 13)),
-                              onChanged: (checked) {
-                                setDialogState(() {
-                                  if (checked == true) {
-                                    selected.add(fonts[i]);
-                                  } else {
-                                    selected.remove(fonts[i]);
-                                  }
-                                });
-                                videoState.setExternalSubtitleFontName(
-                                    selected.join(','));
-                              },
-                            ),
-                        ],
-                      ),
+                child: FutureBuilder<List<String>>(
+                  future: activeFonts,
+                  builder: (context, snapshot) {
+                    final dialogFonts = snapshot.data ?? const <String>[];
+                    if (dialogFonts.isEmpty) {
+                      return const Center(
+                        child: Text('未找到可用字体，可先导入字体文件',
+                            style: TextStyle(color: Colors.white54)),
+                      );
+                    }
+                    return ListView(
+                      children: [
+                        for (var i = 0; i < dialogFonts.length; i++)
+                          CheckboxListTile(
+                            autofocus: i == 0 && globals.isTelevision,
+                            dense: true,
+                            value: selected.contains(dialogFonts[i]),
+                            title: Text(dialogFonts[i],
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 13)),
+                            onChanged: (checked) {
+                              setDialogState(() {
+                                if (checked == true) {
+                                  selected.add(dialogFonts[i]);
+                                } else {
+                                  selected.remove(dialogFonts[i]);
+                                }
+                              });
+                              videoState.setExternalSubtitleFontName(
+                                  selected.join(','));
+                            },
+                          ),
+                      ],
+                    );
+                  },
+                ),
               ),
               actions: [
+                OutlinedButton.icon(
+                  onPressed: () => _importExternalSheetFonts(videoState, () {
+                    setDialogState(() {
+                      activeFonts = videoState.listSubtitleFonts();
+                    });
+                    onFontsImported();
+                  }),
+                  icon: const Icon(Icons.file_open,
+                      size: 16, color: Colors.white70),
+                  label: const Text('导入字体',
+                      style: TextStyle(color: Colors.white70, fontSize: 13)),
+                  style: _sheetButtonStyle(),
+                ),
                 TextButton(
                   onPressed: () => Navigator.pop(dialogContext),
                   child: const Text('完成'),
@@ -969,6 +1056,46 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
         );
       },
     );
+  }
+
+  /// 与字幕设置菜单同一套导入逻辑：iOS/Android 多选字体文件（file_selector
+  /// 的目录选择在移动端不支持），桌面端选文件夹整目录导入。导入不自动套
+  /// 用字体名，由用户在字体列表里自由勾选。
+  static final XTypeGroup _fontXTypeGroup = const XTypeGroup(
+    label: 'Font',
+    extensions: ['ttf', 'otf', 'ttc'],
+    uniformTypeIdentifiers: [
+      'public.truetype-font',
+      'public.opentype-font',
+      'public.font',
+      'public.data',
+      'public.item',
+    ],
+  );
+
+  Future<void> _importExternalSheetFonts(
+    VideoPlayerState videoState,
+    VoidCallback onImported,
+  ) async {
+    try {
+      var count = 0;
+      if (!kIsWeb && (io.Platform.isIOS || io.Platform.isAndroid)) {
+        final files = await openFiles(acceptedTypeGroups: [_fontXTypeGroup]);
+        for (final f in files) {
+          await videoState.importSubtitleFontFile(f.path, applyName: false);
+          count++;
+        }
+      } else if (!kIsWeb) {
+        final directory = await getDirectoryPath();
+        if (directory != null) {
+          count = await videoState.importSubtitleFontDirectory(directory);
+        }
+      }
+      debugPrint('[SubtitleOverlay] 导入字体文件 $count 个');
+      onImported();
+    } catch (e) {
+      debugPrint('[SubtitleOverlay] 导入字体失败: $e');
+    }
   }
 
   /// 字幕轴同步诊断：同一条字幕只记一次，且全局每秒最多一条，
@@ -995,11 +1122,6 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
       'file=${path.split('/').last} '
       'cue=${cueKey.length > 24 ? '${cueKey.substring(0, 24)}...' : cueKey}',
     );
-  }
-
-  // 与字幕设置菜单共用同一字体列表（含字体库 subtitle_fonts + 本地 fonts）
-  Future<List<String>> _listSubtitleFontNames(VideoPlayerState videoState) {
-    return videoState.listSubtitleFonts();
   }
 
   String _formatDelayInputText(double value) {
@@ -1214,6 +1336,23 @@ class _OutlinedSubtitleText extends StatelessWidget {
         ),
         fillText,
       ],
+    );
+  }
+}
+
+/// 键盘避让容器：把 viewInsets 依赖隔离在这个小部件里，键盘弹出/收起
+/// 动画的逐帧 inset 变化只重建这里，不重建整块面板内容（此前整面板挂
+/// 在 MediaQuery 上，输入框聚焦时键盘动画每次 tick 全量重建造成卡顿）。
+class _SheetKeyboardAvoider extends StatelessWidget {
+  final Widget child;
+
+  const _SheetKeyboardAvoider({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(context).bottom),
+      child: child,
     );
   }
 }
