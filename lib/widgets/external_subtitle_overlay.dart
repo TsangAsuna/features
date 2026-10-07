@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:nipaplay/utils/globals.dart' as globals;
 import 'package:nipaplay/utils/video_player_state.dart';
 import 'package:provider/provider.dart';
 
@@ -52,6 +53,21 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
   String _lastLoggedCueKey = '';
   int _lastSyncLogAtMs = 0;
   static const int _syncLogMinIntervalMs = 1000;
+
+  /// 手势上下文的同步收框（点框外/占位框/面板关闭）：postFrame 版本在
+  /// 手势路径上要等下一帧才落位，测试与真机都有可感知延迟。
+  void _collapseEditBoxNow(VideoPlayerState videoState) {
+    if (!mounted || _editingPath == null) return;
+    setState(() {
+      _editingPath = null;
+      _editingCueText = null;
+    });
+    _stopTwoFingerLongPress();
+    if (!videoState.isDisposed) {
+      videoState.setSubtitleEditBoxVisible(false);
+      videoState.setSubtitleDragActive(false);
+    }
+  }
 
   /// 收起编辑框并清理手势拦截标志（在 build 中检测状态变化后调用，
   /// 通过 postFrame 延迟 setState，避免构建期改状态）。
@@ -165,41 +181,62 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
       // 编辑态（已出框）即使处于两条字幕的空隙也要显示占位框，
       // 否则框突然消失、用户失去拖动锚点。
       if (_editingPath == path) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          child: Align(
-            alignment: Alignment(
-              0, // 水平固定居中：全局水平对齐只作用于内嵌轨
-              _resolveVerticalAlignment(
-                  videoState.pathSubtitlePosition(path)),
+        // 空隙期占位框必须可消：垫一层舞台级「点外部收框」命中层，
+        // 占位框本身也可点击收框——否则空隙期出现无法交互的小孤框，
+        // 只能等下一句字幕出现才能点掉（用户反馈）。
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _collapseEditBoxNow(videoState),
+              ),
             ),
-            child: Transform.translate(
-              offset: Offset(videoState.pathSubtitleMarginX(path), 0),
-              // 与编辑态相同的双层结构：占位文本 + 边框层
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  const SizedBox(
-                    width: 120,
-                    height: 28,
-                    child: Opacity(opacity: 0, child: Text(' ')),
+            Positioned.fill(
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                child: Align(
+                  alignment: Alignment(
+                    0, // 水平固定居中：全局水平对齐只作用于内嵌轨
+                    _resolveVerticalAlignment(
+                        videoState.pathSubtitlePosition(path)),
                   ),
-                  Positioned.fill(
-                    child: IgnorePointer(
-                      child: Container(
-                        decoration: BoxDecoration(
-                          border: Border.all(
-                            color: const Color(0x99FFFFFF),
-                            width: 1,
+                  child: Transform.translate(
+                    offset: Offset(videoState.pathSubtitleMarginX(path), 0),
+                    // 与编辑态相同的双层结构：占位文本 + 边框层
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _collapseEditBoxNow(videoState),
+                      child: Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          const SizedBox(
+                            width: 120,
+                            height: 28,
+                            child: Opacity(opacity: 0, child: Text(' ')),
                           ),
-                        ),
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: const Color(0x99FFFFFF),
+                                    width: 1,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
-                ],
+                ),
               ),
             ),
-          ),
+          ],
         );
       }
       return const SizedBox.shrink();
@@ -532,7 +569,7 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
           }
         }
 
-        return Padding(
+        final Widget content = Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           child: Align(
             alignment: Alignment(0, alignmentY),
@@ -544,6 +581,25 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
               child: positionedContent,
             ),
           ),
+        );
+
+        if (!isEditingThis) {
+          return content;
+        }
+        // 编辑态垫一层舞台级「点外部收框」命中层：点击框外任意区域即收
+        // 框（框自身的 detector 在上层优先命中，框内交互不受影响）。收框
+        // 后该层随之消失，点击恢复正常透传给播放器。
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => _collapseEditBoxNow(videoState),
+              ),
+            ),
+            Positioned.fill(child: content),
+          ],
         );
       },
     );
@@ -589,6 +645,14 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
           videoState.setPathSubtitleDelaySeconds(path, value);
           previewValue.value = value;
           delayController.text = _formatDelayInputText(value);
+        }
+
+        // 输入过程中的实时应用：绝不改写文本框——"-0" 会被
+        // _formatDelayInputText 归一化成 "0"，把用户正在输入的负号敲掉，
+        // 导致永远输不出 -0.1 这类负小数（用户反馈）。
+        void applyTextValue(double value) {
+          videoState.setPathSubtitleDelaySeconds(path, value);
+          previewValue.value = value;
         }
 
         // 常用字幕颜色调色板
@@ -675,7 +739,7 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
                           ),
                           onChanged: (text) {
                             final parsed = double.tryParse(text.trim());
-                            if (parsed != null) applyValue(parsed);
+                            if (parsed != null) applyTextValue(parsed);
                           },
                           onSubmitted: (text) {
                             final parsed = double.tryParse(text.trim());
@@ -726,25 +790,44 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
                               .map((e) => e.trim())
                               .where((e) => e.isNotEmpty)
                               .toSet();
-                          return Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              for (final f in fonts)
-                                FilterChip(
-                                  label: Text(f,
-                                      style: const TextStyle(fontSize: 12)),
-                                  selected: selected.contains(f),
-                                  onSelected: (sel) {
-                                    final next = sel
-                                        ? [...selected, f].join(',')
-                                        : selected
-                                            .where((e) => e != f)
-                                            .join(',');
-                                    videoState
-                                        .setExternalSubtitleFontName(next);
-                                  },
-                                ),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 8,
+                                children: [
+                                  for (final f in fonts)
+                                    FilterChip(
+                                      label: Text(f,
+                                          style: const TextStyle(
+                                              fontSize: 12)),
+                                      selected: selected.contains(f),
+                                      onSelected: (sel) {
+                                        final next = sel
+                                            ? [...selected, f].join(',')
+                                            : selected
+                                                .where((e) => e != f)
+                                                .join(',');
+                                        videoState
+                                            .setExternalSubtitleFontName(
+                                                next);
+                                      },
+                                    ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              OutlinedButton.icon(
+                                onPressed: () => _showFontMultiSelectDialog(
+                                    context, videoState, fonts),
+                                icon: const Icon(Icons.font_download,
+                                    size: 16, color: Colors.white70),
+                                label: const Text('选择字体',
+                                    style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 13)),
+                                style: _sheetButtonStyle(),
+                              ),
                             ],
                           );
                         },
@@ -787,27 +870,102 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
                     },
                   ),
                   const SizedBox(height: 8),
-                  GestureDetector(
-                    onTap: () => _showHsvPicker(context, videoState),
-                    child: const Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(Icons.palette, size: 16, color: Colors.white70),
-                        SizedBox(width: 6),
-                        Text(
-                          '全色调色盘',
-                          style: TextStyle(
-                            color: Colors.white70,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
+                  // 大目标按钮（原先是 16px 小图标，TV 遥控/手指都难命中）。
+                  OutlinedButton.icon(
+                    onPressed: () => _showHsvPicker(context, videoState),
+                    icon: const Icon(Icons.palette,
+                        size: 16, color: Colors.white70),
+                    label: const Text('全色调色盘',
+                        style: TextStyle(color: Colors.white70, fontSize: 13)),
+                    style: _sheetButtonStyle(),
                   ),
                 ],
               ),
             ),
           ),
+        );
+      },
+    ).whenComplete(() {
+      // 面板关闭（确认/取消/点外部）即收框：设置已实时应用，留着框只会
+      // 在字幕空隙期变成无法交互的孤框。
+      if (mounted && _editingPath == path) {
+        _collapseEditBoxNow(videoState);
+      }
+    });
+  }
+
+  /// 面板内操作按钮样式（Nipa 深色面板 + amber 焦点/悬停高亮）。
+  /// Material 按钮原生支持 D-pad 焦点遍历，TV 遥控可直接移动焦点触发。
+  ButtonStyle _sheetButtonStyle() {
+    return OutlinedButton.styleFrom(
+      foregroundColor: Colors.white,
+      backgroundColor: const Color(0x22FFFFFF),
+      side: const BorderSide(color: Colors.white24),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      overlayColor: Colors.amber.withValues(alpha: 0.18),
+    );
+  }
+
+  /// 字体多选对话框（复选列表，勾选即时生效）：给 TV 遥控一个可焦点遍
+  /// 历的大目标入口——FilterChip 小目标在遥控上难命中（用户反馈）。
+  Future<void> _showFontMultiSelectDialog(
+    BuildContext context,
+    VideoPlayerState videoState,
+    List<String> fonts,
+  ) async {
+    final selected = videoState.externalSubtitleFontName
+        .split(',')
+        .map((e) => e.trim())
+        .where((e) => e.isNotEmpty)
+        .toSet();
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('选择字体（可多选）'),
+              content: SizedBox(
+                width: 320,
+                height: 380,
+                child: fonts.isEmpty
+                    ? const Center(
+                        child: Text('未找到可用字体',
+                            style: TextStyle(color: Colors.white54)))
+                    : ListView(
+                        children: [
+                          for (var i = 0; i < fonts.length; i++)
+                            CheckboxListTile(
+                              autofocus: i == 0 && globals.isTelevision,
+                              dense: true,
+                              value: selected.contains(fonts[i]),
+                              title: Text(fonts[i],
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 13)),
+                              onChanged: (checked) {
+                                setDialogState(() {
+                                  if (checked == true) {
+                                    selected.add(fonts[i]);
+                                  } else {
+                                    selected.remove(fonts[i]);
+                                  }
+                                });
+                                videoState.setExternalSubtitleFontName(
+                                    selected.join(','));
+                              },
+                            ),
+                        ],
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('完成'),
+                ),
+              ],
+            );
+          },
         );
       },
     );

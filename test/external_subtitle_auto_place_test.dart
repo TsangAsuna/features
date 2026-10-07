@@ -214,9 +214,115 @@ void main() {
     );
     expect((alignRegular.alignment as Alignment).y, 0.8);
   });
+
+  testWidgets('edit box collapses on outside tap', (tester) async {
+    final delegate = _FakeMediaKitDelegate();
+    final videoState = await _buildVideoPlayerState(delegate);
+    late final String path;
+    await tester.runAsync(() async {
+      path = await _writeTempSrt();
+    });
+
+    videoState.setExternalSubtitle(path);
+    await tester.pumpWidget(_wrapStage(videoState, path));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 40; i++) {
+        if (videoState.pathSubtitleTextAt(path, 1000).isNotEmpty) return;
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    });
+    await tester.pumpWidget(_wrapStage(videoState, path));
+    await tester.pump();
+
+    // 长按出框
+    await tester.longPress(find.text('外挂字幕行').first);
+    await tester.pump();
+    expect(videoState.subtitleEditBoxVisible, isTrue);
+
+    // 点击框外任意区域（舞台级命中层）→ 收框，点击恢复透传
+    await tester.tapAt(const Offset(30, 30));
+    await tester.pump();
+    expect(videoState.subtitleEditBoxVisible, isFalse);
+  });
+
+  testWidgets('idle-gap placeholder is dismissible by outside tap',
+      (tester) async {
+    final delegate = _FakeMediaKitDelegate();
+    final videoState = await _buildVideoPlayerState(delegate);
+    late final String path;
+    await tester.runAsync(() async {
+      path = await _writeTempSrt();
+    });
+
+    videoState.setExternalSubtitle(path);
+    await tester.pumpWidget(_wrapStage(videoState, path));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 40; i++) {
+        if (videoState.pathSubtitleTextAt(path, 1000).isNotEmpty) return;
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    });
+    await tester.pumpWidget(_wrapStage(videoState, path));
+    await tester.pump();
+    await tester.longPress(find.text('外挂字幕行').first);
+    await tester.pump();
+    expect(videoState.subtitleEditBoxVisible, isTrue);
+
+    // 播放推进到无字幕的空隙：占位小框出现（边界可辨识）
+    await tester.pumpWidget(_wrapStage(videoState, path, positionMs: 3700000));
+    await tester.pump();
+    expect(videoState.pathSubtitleTextAt(path, 3700000), isEmpty);
+
+    // 占位小框期间点框外 → 收框（修复：以前空隙期孤框无法消）
+    await tester.tapAt(const Offset(30, 30));
+    await tester.pump();
+    expect(videoState.subtitleEditBoxVisible, isFalse);
+    expect(
+      find.byWidgetPredicate((w) =>
+          w is Container &&
+          w.decoration is BoxDecoration &&
+          (w.decoration as BoxDecoration).border != null),
+      findsNothing,
+    );
+  });
+
+  testWidgets('closing the settings panel collapses the edit box',
+      (tester) async {
+    final delegate = _FakeMediaKitDelegate();
+    final videoState = await _buildVideoPlayerState(delegate);
+    late final String path;
+    await tester.runAsync(() async {
+      path = await _writeTempSrt();
+    });
+
+    videoState.setExternalSubtitle(path);
+    await tester.pumpWidget(_wrapStage(videoState, path));
+    await tester.runAsync(() async {
+      for (var i = 0; i < 40; i++) {
+        if (videoState.pathSubtitleTextAt(path, 1000).isNotEmpty) return;
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+    });
+    await tester.pumpWidget(_wrapStage(videoState, path));
+    await tester.pump();
+    await tester.longPress(find.text('外挂字幕行').first);
+    await tester.pump();
+    expect(videoState.subtitleEditBoxVisible, isTrue);
+
+    // 打开设置面板（框上 tune 按钮），点面板外（barrier）关闭 → 收框
+    await tester.tap(find.byIcon(Icons.tune));
+    await tester.pump();
+    await tester.pump();
+    await tester.tapAt(const Offset(20, 20));
+    await tester.pump();
+    await tester.pump();
+    expect(videoState.subtitleEditBoxVisible, isFalse,
+        reason: '设置面板关闭（确认/取消）后编辑框必须一并收起');
+  });
 }
 
-Widget _wrapStage(VideoPlayerState videoState, String path) {
+Widget _wrapStage(VideoPlayerState videoState, String path,
+    {double positionMs = 1000}) {
   return ChangeNotifierProvider<VideoPlayerState>.value(
     value: videoState,
     child: MaterialApp(
@@ -228,7 +334,7 @@ Widget _wrapStage(VideoPlayerState videoState, String path) {
           child: Stack(
             children: [
               Positioned.fill(
-                child: ExternalSubtitleOverlay(currentPositionMs: 1000),
+                child: ExternalSubtitleOverlay(currentPositionMs: positionMs),
               ),
             ],
           ),
