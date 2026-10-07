@@ -210,29 +210,37 @@ class SubtitleManager extends ChangeNotifier {
       final state = _ensurePathDisplayState(path);
       state['position'] = position;
       state['marginX'] = marginX;
+      // 全局滑块是显式摆位意图：清除底部黑边自动摆位。
+      state.remove('belowVideo');
       unawaited(_savePathDisplayState(path));
     }
     notifyListeners();
   }
 
-  /// 异步恢复某条字幕的显示状态（激活后调用；磁盘值优先于默认值）
-  Future<void> _loadPathDisplayState(String path) async {
+  /// 异步恢复某条字幕的显示状态（激活后调用；磁盘值优先于默认值）。
+  /// 返回该路径是否有过已保存的显示状态（供自动摆位判断：已调整过的
+  /// 字幕尊重其记忆值，不再自动摆位）。
+  Future<bool> _loadPathDisplayState(String path) async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = prefs.getString(_pathDisplayStateKey(path));
-      if (raw == null || raw.isEmpty) return;
+      if (raw == null || raw.isEmpty) return false;
       final decoded = json.decode(raw);
-      if (decoded is! Map) return;
+      if (decoded is! Map) return true;
       final state = _ensurePathDisplayState(path);
       final delay = (decoded['delay'] as num?)?.toDouble();
       final position = (decoded['position'] as num?)?.toDouble();
       final marginX = (decoded['marginX'] as num?)?.toDouble();
+      final belowVideo = (decoded['belowVideo'] as num?)?.toDouble();
       if (delay != null) state['delay'] = delay;
       if (position != null) state['position'] = position;
       if (marginX != null) state['marginX'] = marginX;
+      if (belowVideo != null) state['belowVideo'] = belowVideo;
       notifyListeners();
+      return true;
     } catch (e) {
       debugPrint('SubtitleManager: 恢复字幕显示状态失败: $e');
+      return false;
     }
   }
 
@@ -268,6 +276,8 @@ class SubtitleManager extends ChangeNotifier {
   void setPathPosition(String path, double position) {
     final state = _ensurePathDisplayState(path);
     state['position'] = position;
+    // 手动摆位接管：清除底部黑边自动摆位（拖动/滑块是用户的显式意图）。
+    state.remove('belowVideo');
     unawaited(_savePathDisplayState(path));
     // 内核轨字幕（libmpv ASS/SSA）：位置同步 mpv sub-pos（libass 渲染）
     if (!_shouldRenderExternalSubtitleInApp(path)) {
@@ -288,8 +298,48 @@ class SubtitleManager extends ChangeNotifier {
   void setPathMarginX(String path, double marginX) {
     final state = _ensurePathDisplayState(path);
     state['marginX'] = marginX;
+    // 手动摆位接管：清除底部黑边自动摆位。
+    state.remove('belowVideo');
     unawaited(_savePathDisplayState(path));
     notifyListeners();
+  }
+
+  /// 该外挂是否处于「底部黑边居中」自动摆位：混挂（内嵌轨显示中）时
+  /// 新激活的外挂自动放到视频矩形以下的黑边区域并水平居中，省去每次
+  /// 长按拖动；渲染层按实时视频矩形计算落点，无黑边时回退常规位置。
+  bool pathBelowVideo(String path) =>
+      (_ensurePathDisplayState(path)['belowVideo'] ?? 0.0) > 0.5;
+
+  /// 混挂自动摆位：内嵌轨显示中且仅一条 App 渲染外挂时，把该外挂初始
+  /// 化到底部黑边居中。仅在该路径从未保存过显示状态时执行（已手动调整
+  /// 过的尊重记忆值）；自动结果同样持久化，之后随状态恢复。不触碰编辑
+  /// 框/拖动态——纯状态写入，不引入弹幕闪烁源。
+  Future<void> _autoPlaceExternalSubtitleIfNeeded(String path) async {
+    final hadSavedState = await _loadPathDisplayState(path);
+    try {
+      if (hadSavedState) return;
+      if (!_shouldRenderExternalSubtitleInApp(path)) return;
+      if (!_activeExternalSubtitlePaths.contains(path)) return;
+      final appRenderedCount = _activeExternalSubtitlePaths
+          .where(_shouldRenderExternalSubtitleInApp)
+          .length;
+      if (appRenderedCount != 1) return;
+      bool embeddedDisplayed;
+      try {
+        embeddedDisplayed = _player.activeSubtitleTracks.isNotEmpty;
+      } catch (_) {
+        return;
+      }
+      if (!embeddedDisplayed) return;
+      final state = _ensurePathDisplayState(path);
+      state['belowVideo'] = 1.0;
+      await _savePathDisplayState(path);
+      notifyListeners();
+      debugPrint(
+          'SubtitleManager: 混挂自动摆位到底部黑边居中: ${p.basename(path)}');
+    } catch (e) {
+      debugPrint('SubtitleManager: 混挂自动摆位失败: $e');
+    }
   }
 
   /// 查询单条字幕在指定时间点的文本（多字幕分块渲染使用）
@@ -736,7 +786,7 @@ class SubtitleManager extends ChangeNotifier {
             ..clear()
             ..add(path);
         }
-        unawaited(_loadPathDisplayState(path));
+        unawaited(_autoPlaceExternalSubtitleIfNeeded(path));
 
         // 更新轨道信息（title 用登记的显示名；远程缓存文件名是哈希）
         updateSubtitleTrackInfo('external_subtitle', {
@@ -855,7 +905,7 @@ class SubtitleManager extends ChangeNotifier {
           staggerDepth: _activeExternalSubtitlePaths.length),
     );
     _activeExternalSubtitlePaths.add(path);
-    unawaited(_loadPathDisplayState(path));
+    unawaited(_autoPlaceExternalSubtitleIfNeeded(path));
     if (_shouldRenderExternalSubtitleInApp(path)) {
       // 叠层字幕（SRT/VTT）：App 内逐条渲染，不影响其它条目
       _activateAppRenderedExternalSubtitle(path);

@@ -256,6 +256,11 @@ extension VideoPlayerStateSubtitles on VideoPlayerState {
   double pathSubtitleMarginX(String path) =>
       _subtitleManager.pathMarginX(path);
 
+  /// 该外挂是否处于「底部黑边居中」自动摆位（混挂时新外挂自动放到
+  /// 视频矩形以下的黑边区域，水平居中；手动拖动/全局滑块即接管）。
+  bool pathSubtitleBelowVideo(String path) =>
+      _subtitleManager.pathBelowVideo(path);
+
   void setPathSubtitleMarginX(String path, double marginX) {
     _subtitleManager.setPathMarginX(path, marginX);
     _notifyListeners();

@@ -506,17 +506,39 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
           positionedContent = boxLayer;
         }
 
+        // 底部黑边自动摆位（belowVideo）：混挂时新外挂自动放到视频矩形
+        // 以下的黑边区域并水平居中（落点按实时舞台尺寸与视频宽高比计
+        // 算，旋转/缩放跟随）；无黑边（视频占满舞台）时回退常规位置。
+        // 手动拖动或全局滑块会清除 belowVideo，恢复手动语义。
+        final belowVideo =
+            !isEditingThis && videoState.pathSubtitleBelowVideo(path);
+        var alignmentY =
+            _resolveVerticalAlignment(videoState.pathSubtitlePosition(path));
+        var translateX = videoState.pathSubtitleMarginX(path);
+        if (belowVideo) {
+          final stageHeight = constraints.maxHeight;
+          final videoRect =
+              _stageVideoRect(width, stageHeight, videoState.aspectRatio);
+          final barTop = videoRect.bottom.clamp(0.0, stageHeight);
+          if (barTop < stageHeight * 0.97) {
+            // 黑边中心（舞台坐标）→ Align 映射基于内边距后区域，需换算。
+            final barCenterY = barTop + (stageHeight - barTop) / 2;
+            const padV = 16.0;
+            final paddedH = (stageHeight - padV * 2).clamp(1.0, double.infinity);
+            final centerFrac =
+                ((barCenterY - padV) / paddedH).clamp(0.0, 1.0);
+            alignmentY = centerFrac * 2 - 1;
+            translateX = 0; // 黑边区域内水平居中
+          }
+        }
+
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           child: Align(
-            alignment: Alignment(
-              0, // 水平固定居中：全局水平对齐只作用于内嵌轨
-              _resolveVerticalAlignment(
-                  videoState.pathSubtitlePosition(path)),
-            ),
+            alignment: Alignment(0, alignmentY),
             child: Transform.translate(
               offset: Offset(
-                videoState.pathSubtitleMarginX(path),
+                translateX,
                 0, // 外挂垂直位移独立（pathSubtitlePosition 控制），不跟随全局垂直边距滑块
               ),
               child: positionedContent,
@@ -525,6 +547,23 @@ class _ExternalSubtitleOverlayState extends State<ExternalSubtitleOverlay> {
         );
       },
     );
+  }
+
+  /// 舞台内按 contain 适配的视频显示矩形（黑边在矩形之外）。
+  Rect _stageVideoRect(double stageW, double stageH, double aspect) {
+    if (aspect <= 0) aspect = 16 / 9;
+    double videoW;
+    double videoH;
+    if (stageW / stageH > aspect) {
+      videoH = stageH;
+      videoW = stageH * aspect;
+    } else {
+      videoW = stageW;
+      videoH = stageW / aspect;
+    }
+    final left = (stageW - videoW) / 2;
+    final top = (stageH - videoH) / 2;
+    return Rect.fromLTWH(left, top, videoW, videoH);
   }
 
   /// 长按/双指/设置钮弹出的字幕设置面板（按字幕路径独立调时轴延迟）
