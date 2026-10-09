@@ -32,9 +32,11 @@ class DandanplayService {
   static const Duration _animeSearchCacheDuration = Duration(days: 7);
   static const Duration _emptyAnimeSearchCacheDuration = Duration(hours: 12);
   static const Duration _bangumiDetailsCacheDuration = Duration(hours: 6);
-  static const Duration _authorizedBangumiDetailsCacheDuration = Duration(
-    minutes: 15,
-  );
+  // 评分/收藏提交走 addFavorite（按番清缓存），登录/退出/token 变更也会
+  // 全量清——观看事件并不改详情里的用户态字段，15 分钟过短导致简介频繁
+  // 重新加载（用户反馈），与未登录态对齐为 6 小时。
+  static const Duration _authorizedBangumiDetailsCacheDuration =
+      Duration(hours: 6);
   static const Duration _unmatchedVideoCacheDuration = Duration(days: 3);
   static const int _filenameFallbackVersion = 2;
   static const int _animeSearchCacheMaxEntries = 300;
@@ -58,6 +60,12 @@ class DandanplayService {
   static final Map<int, Future<Map<String, dynamic>>> _bangumiDetailsInFlight =
       {};
   static int _bangumiDetailsCacheEpoch = 0;
+  // 全量播放历史的会话缓存：集数列表的「已看」徽标每次都全量下载整份
+  // 播放历史，账号历史越大越慢（用户反馈）。本地提交观看事件时失效。
+  static Map<String, dynamic>? _playHistoryMemoryCache;
+  static DateTime? _playHistoryMemoryCacheTime;
+  static Future<Map<String, dynamic>>? _playHistoryInFlight;
+  static const Duration _playHistoryCacheDuration = Duration(minutes: 5);
   static bool get isLoggedIn => _isLoggedIn;
   static String? get userName => _userName;
   static String? get screenName => _screenName;
@@ -280,6 +288,7 @@ class DandanplayService {
 
   static Future<void> clearLoginInfo() async {
     _clearBangumiDetailsCache();
+    _clearPlayHistoryCache();
     _token = null;
     _userName = null;
     _screenName = null;
@@ -378,6 +387,7 @@ class DandanplayService {
 
   static Future<void> clearToken() async {
     _clearBangumiDetailsCache();
+    _clearPlayHistoryCache();
     _token = null;
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('dandanplay_token');
@@ -1083,7 +1093,10 @@ class DandanplayService {
         final data = json.decode(response.body);
         if (data['success'] == true) {
           debugPrint('[弹弹play服务] 观看状态更新成功');
-          _clearBangumiDetailsCache();
+          // 观看状态只影响播放历史（「已看」徽标数据源），不改详情里的
+          // 简介/集数/用户评分字段——清播放历史缓存即可，清详情缓存会让
+          // 简介每次看完都重新加载（用户反馈）。
+          _clearPlayHistoryCache();
         } else {
           throw Exception(data['errorMessage'] ?? '更新观看状态失败');
         }
@@ -1812,6 +1825,47 @@ class DandanplayService {
       throw Exception('需要登录才能获取播放历史');
     }
 
+    // 全量历史（无日期过滤）走会话缓存 + 在途去重；带日期的调用保持原样。
+    if (fromDate == null && toDate == null) {
+      final cached = _playHistoryMemoryCache;
+      final cachedAt = _playHistoryMemoryCacheTime;
+      if (cached != null &&
+          cachedAt != null &&
+          DateTime.now().difference(cachedAt) < _playHistoryCacheDuration) {
+        return Map<String, dynamic>.from(cached);
+      }
+      final inFlight = _playHistoryInFlight;
+      if (inFlight != null) {
+        return Map<String, dynamic>.from(await inFlight);
+      }
+      final request = _fetchPlayHistoryUncached();
+      _playHistoryInFlight = request;
+      try {
+        final result = await request;
+        if (result['success'] == true) {
+          _playHistoryMemoryCache = Map<String, dynamic>.from(result);
+          _playHistoryMemoryCacheTime = DateTime.now();
+        }
+        return result;
+      } finally {
+        if (identical(_playHistoryInFlight, request)) {
+          _playHistoryInFlight = null;
+        }
+      }
+    }
+    return _fetchPlayHistoryUncached(fromDate: fromDate, toDate: toDate);
+  }
+
+  static void _clearPlayHistoryCache() {
+    _playHistoryMemoryCache = null;
+    _playHistoryMemoryCacheTime = null;
+    _playHistoryInFlight = null;
+  }
+
+  static Future<Map<String, dynamic>> _fetchPlayHistoryUncached({
+    DateTime? fromDate,
+    DateTime? toDate,
+  }) async {
     try {
       final appSecret = await getAppSecret();
       final timestamp =
@@ -1930,7 +1984,7 @@ class DandanplayService {
         final data = json.decode(response.body);
         if (data['success'] == true) {
           debugPrint('[弹弹play服务] 播放历史提交成功');
-          _clearBangumiDetailsCache();
+          _clearPlayHistoryCache();
           return data;
         } else {
           throw Exception(data['errorMessage'] ?? '提交播放历史失败');

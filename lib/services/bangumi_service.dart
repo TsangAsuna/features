@@ -423,13 +423,12 @@ class BangumiService {
             _detailsCacheTime.remove(animeId);
           }
         } else {
-          // 对于自定义媒体信息，即使缺少标签也返回
-          if (animeId < 0) {
-            //debugPrint('[番剧服务] 从内存缓存获取缺少标签的自定义番剧 $animeId 的详情');
+          // 标签缺失是 API 的合法状态（部分番剧不返回 tags），不再视为
+          // 损坏强制重取——否则这类番剧缓存永不命中，每次打开简介都重新
+          // 加载（用户反馈）。语言不匹配仍需重取；自定义番剧直接返回。
+          if (animeId < 0 || cachedAnime.language == expectedLanguage) {
             return cachedAnime;
           }
-          //debugPrint('[番剧服务] 番剧 $animeId 的内存缓存缺少标签信息，将重新获取');
-          // 移除缓存，强制重新获取
           _detailsCache.remove(animeId);
           _detailsCacheTime.remove(animeId);
         }
@@ -452,27 +451,17 @@ class BangumiService {
         return diskCachedDetail;
       }
 
-      // 对于正常番剧，检查标签和语言
-      // 检查磁盘缓存是否包含标签信息
-      if (diskCachedDetail.tags != null && diskCachedDetail.tags!.isNotEmpty) {
-        // 检查语言是否匹配
-        if (diskCachedDetail.language == expectedLanguage) {
-          //debugPrint('[番剧服务] 从磁盘缓存获取番剧 $animeId 的详情成功');
-          return diskCachedDetail;
-        } else {
-          //debugPrint('[番剧服务] 番剧 $animeId 的磁盘缓存语言不匹配，将重新获取');
-          // 删除有问题的磁盘缓存
-          final prefs = await SharedPreferences.getInstance();
-          final cacheKey = '$_detailsCacheKeyPrefix$animeId';
-          await prefs.remove(cacheKey);
-        }
-      } else {
-        //debugPrint('[番剧服务] 番剧 $animeId 的磁盘缓存缺少标签信息，将重新获取');
-        // 删除有问题的磁盘缓存
-        final prefs = await SharedPreferences.getInstance();
-        final cacheKey = '$_detailsCacheKeyPrefix$animeId';
-        await prefs.remove(cacheKey);
+      // 对于正常番剧只检查语言：标签缺失是 API 合法状态（与内存缓存同
+      // 规则），不再当损坏数据丢弃——否则这类番剧缓存永不命中，每次打
+      // 开简介都重新加载（用户反馈）。
+      if (diskCachedDetail.language == expectedLanguage) {
+        //debugPrint('[番剧服务] 从磁盘缓存获取番剧 $animeId 的详情成功');
+        return diskCachedDetail;
       }
+      //debugPrint('[番剧服务] 番剧 $animeId 的磁盘缓存语言不匹配，将重新获取');
+      final prefs = await SharedPreferences.getInstance();
+      final cacheKey = '$_detailsCacheKeyPrefix$animeId';
+      await prefs.remove(cacheKey);
     }
 
     // 对于自定义媒体信息（animeId为负数），尝试从本地数据生成
