@@ -21,6 +21,19 @@ description: Use when diagnosing danmaku problems (missing/few danmaku, wrong ma
 - 弹幕来源 UI 占位：Cupertino 弹幕轨道面板的 Bilibili/AcFun 磁贴未启用，
   实际只有 DandanPlay 聚合。扩弹幕三途径：本地 XML/JSON 文件加载（弹幕
   轨道菜单）、第三方弹弹play 兼容服务器（API 设置）、换匹配。
+- **外部播放器弹幕注入矩阵**（谁能拿到弹幕集，门槛在
+  `external_player_service.dart` 的 playerType 白名单）：mpv/mpv.net =
+  JSON IPC，可运行时刷新；PotPlayer = 启动 `/sub` + 运行时
+  `/current /sub=` 重载；MPC-BE（#1023）= 仅启动时 `/sub`，无公开控制
+  接口，`refreshDanmaku` 如实返回 false，起播位置
+  `/startpos=hh:mm:ss.ff`；VLC/通用 = 不取弹幕。新增播放器先答"有没有
+  运行时控制通道"，再决定走哪条注入路线。
+- **手动匹配建档保留扫描语义**（#1047）：媒体库手动匹配为无历史文件首次
+  建档必须 `isFromScan ?? true`——否则详情页剧集徽标判定链（进度 →
+  isFromScan「未播放」→ 兜底「共享媒体」）会把刚匹配的本地媒体标成
+  「共享媒体」。详情页来源兜底标签用调用方 `sharedSourceLabel ?? '共享
+  媒体'`，桌面与 large-screen 两个变体（`anime_detail_page.dart` /
+  `large_screen_anime_detail_page.dart`）都要改。
 
 ## 音频：能力矩阵（"DDP 能不能放"的标准答案）
 
