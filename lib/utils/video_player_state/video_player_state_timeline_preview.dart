@@ -10,6 +10,22 @@ bool supportsTimelinePreviewForKernel(PlayerKernelType kernel) {
   return kernel == PlayerKernelType.mdk;
 }
 
+/// 预览播放器未挂进 widget tree 时, MDK 渲染线程可能永远不出帧,
+/// snapshot 的完成回调因此永不送达 (#967 窗口未响应)。
+/// 所有 snapshot 等待都必须有界; 超时按无帧处理。
+const Duration timelineSnapshotTimeout = Duration(seconds: 2);
+
+Future<PlayerFrame?> snapshotPlayerFrameBounded(
+  AbstractPlayer player, {
+  required int width,
+  required int height,
+  Duration timeout = timelineSnapshotTimeout,
+}) =>
+    player.snapshot(width: width, height: height).timeout(
+          timeout,
+          onTimeout: () => null,
+        );
+
 extension VideoPlayerStateTimelinePreview on VideoPlayerState {
   bool get timelinePreviewEnabled => _timelinePreviewEnabled;
 
@@ -221,7 +237,10 @@ extension VideoPlayerStateTimelinePreview on VideoPlayerState {
     try {
       previewPlayer.volume = 0;
       previewPlayer.setMedia(source, PlayerMediaType.video);
-      await previewPlayer.prepare();
+      await previewPlayer.prepare().timeout(
+            timelineSnapshotTimeout,
+            onTimeout: () => throw TimeoutException('时间轴预览 prepare 超时'),
+          );
       previewPlayer.state = PlayerPlaybackState.paused;
       await _waitForTimelinePreviewReady(previewPlayer);
       if (kernel == PlayerKernelType.mdk) {
@@ -307,16 +326,27 @@ extension VideoPlayerStateTimelinePreview on VideoPlayerState {
 
       if (kernel == PlayerKernelType.mdk) {
         // MDK 首次 snapshot 可能没有渲染帧，先触发一次以确保后续截图可用。
-        await player.snapshot(width: targetWidth, height: targetHeight);
+        await snapshotPlayerFrameBounded(
+          player,
+          width: targetWidth,
+          height: targetHeight,
+        );
         await Future.delayed(const Duration(milliseconds: 60));
       }
 
-      PlayerFrame? frame =
-          await player.snapshot(width: targetWidth, height: targetHeight);
+      PlayerFrame? frame = await snapshotPlayerFrameBounded(
+        player,
+        width: targetWidth,
+        height: targetHeight,
+      );
       if ((frame == null || frame.bytes.isEmpty) &&
           kernel == PlayerKernelType.mdk) {
         await Future.delayed(const Duration(milliseconds: 80));
-        frame = await player.snapshot(width: targetWidth, height: targetHeight);
+        frame = await snapshotPlayerFrameBounded(
+          player,
+          width: targetWidth,
+          height: targetHeight,
+        );
       }
       if (session != _timelinePreviewSessionId) return null;
       if (frame == null || frame.bytes.isEmpty) {
