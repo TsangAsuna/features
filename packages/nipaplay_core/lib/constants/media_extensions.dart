@@ -37,5 +37,6 @@ enum ExternalPlayerType {
   mpvNet,
   potPlayer,
   vlc,
+  mpcBe,
   generic,
 }

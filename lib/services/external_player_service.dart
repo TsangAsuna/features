@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:flutter/widgets.dart';
 import 'package:nipaplay_core/constants/media_extensions.dart';
 import 'package:nipaplay_core/models/danmaku/danmaku_item.dart';
+import 'package:nipaplay_core/models/external_player_session/mpc_be_session.dart';
 import 'package:nipaplay_core/models/external_player_session/mpv_session.dart';
 import 'package:nipaplay_core/models/external_player_session/other_session.dart';
 import 'package:nipaplay_core/models/external_player_session/potplayer_session.dart';
@@ -88,8 +89,8 @@ abstract final class ExternalPlayerService {
       _log('danmaku: 弹幕外挂未启用');
     } else if (item.episodeId == null) {
       _log('danmaku: 缺少 episodeId，跳过弹幕获取');
-    } else if (playerType != ExternalPlayerType.mpv && playerType != ExternalPlayerType.mpvNet && playerType != ExternalPlayerType.potPlayer) {
-      _log('danmaku: $playerType 暂不支持运行时弹幕刷新，跳过弹幕获取');
+    } else if (playerType != ExternalPlayerType.mpv && playerType != ExternalPlayerType.mpvNet && playerType != ExternalPlayerType.potPlayer && playerType != ExternalPlayerType.mpcBe) {
+      _log('danmaku: $playerType 暂不支持弹幕注入，跳过弹幕获取');
     } else {
       final stopwatch = Stopwatch()..start();
       try {
@@ -126,6 +127,7 @@ abstract final class ExternalPlayerService {
           '--user-agent=$userAgent',
         ExternalPlayerType.vlc => '--http-user-agent=$userAgent',
         ExternalPlayerType.potPlayer => '/user_agent=$userAgent',
+        ExternalPlayerType.mpcBe => null,
         ExternalPlayerType.generic => null,
       };
       if (userAgentArg != null) {
@@ -212,6 +214,23 @@ abstract final class ExternalPlayerService {
           );
         await session.launch();
       break;
+
+        // Windows MPC-BE
+        case ExternalPlayerType.mpcBe:
+          if (platform != AppPlatform.windows) {
+            throw UnsupportedError('MPC-BE 外部播放仅支持 Windows');
+          }
+          _log('launch: 启动 Windows MPC-BE');
+          session = MpcBeSession(
+            playerPath: resolvedPlayerPath,
+            mediaPath: mediaPath,
+            duration: Duration(milliseconds: history?.duration ?? 0),
+            position: Duration(milliseconds: history?.lastPosition ?? 0),
+            extraArgs: extraArgs,
+            initialDanmakuSet: danmakuSet,
+          );
+          await session.launch();
+          break;
 
       // 其他播放器
       default:
