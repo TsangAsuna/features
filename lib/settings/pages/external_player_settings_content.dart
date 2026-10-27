@@ -149,9 +149,9 @@ class ExternalPlayerSettingsContent extends StatelessWidget {
                   subtitle: externalSupported
                       ? _text(
                           context,
-                          '在外部播放器中注入 ASS 弹幕（支持 mpv / mpv.net / Windows PotPlayer）',
-                          '在外部播放器中注入 ASS 彈幕（支援 mpv / mpv.net / Windows PotPlayer）',
-                          'Inject ASS danmaku in mpv, mpv.net, and PotPlayer on Windows.',
+                          '在外部播放器中注入 ASS 弹幕（支持 mpv / mpv.net / Windows PotPlayer / MPC-BE）',
+                          '在外部播放器中注入 ASS 彈幕（支援 mpv / mpv.net / Windows PotPlayer / MPC-BE）',
+                          'Inject ASS danmaku in mpv, mpv.net, PotPlayer, and MPC-BE on Windows.',
                         )
                       : context.l10n.desktopOnlySupported,
                   icon: Ionicons.chatbubbles_outline,
@@ -304,6 +304,7 @@ class ExternalPlayerSettingsContent extends StatelessWidget {
       ExternalPlayerType.mpvNet => 'mpv.net',
       ExternalPlayerType.potPlayer => 'PotPlayer',
       ExternalPlayerType.vlc => 'VLC',
+      ExternalPlayerType.mpcBe => 'MPC-BE',
       ExternalPlayerType.generic =>
         _text(context, '其他/通用', '其他/通用', 'Other / Generic'),
     };

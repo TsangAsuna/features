@@ -53,6 +53,16 @@ isolate 上，**只有旧播放器 teardown 有 5s 超时**——链上任何同
    `ErikaPlayerAdapter.linuxBuildEnabled` 门控下默认 Erika；其余 MDK。
    合并两侧语义时保留 iOS 分支的注释与 Linux 门控（`player_factory.dart`
    `_defaultKernelType`）。
+9. **时间轴预览的一切 snapshot/prepare 等待必须有界**（#967，上游两次
+   修复尝试 #947/#946 均未合并）。预览播放器是第二个 MDK 实例但从不挂进
+   widget tree——纹理创建失败（媒体尺寸未就绪 → `textureSize` future 完成
+   null → fvp `_updateTexture` 返回 -1）后渲染线程永不出帧，`snapshot()`
+   的完成回调永远不来；抽帧串行队列（`_withTimelinePreviewSerial`）首个
+   任务挂死 = 后续全部排队 + hover 调用链挂死 = 窗口"未响应"。统一走
+   `snapshotPlayerFrameBounded`（2s 超时，超时按无帧处理；`prepare()`
+   同样 timeout）。**不要加"回退主播放器截图"**——主播放器停在播放位置，
+   对任意 hover 时刻会产出错误时间戳的帧；彻底方案是 ffmpeg 子进程抽帧
+   （原 #946 路线，未做）。
 
 ## 诊断入口
 

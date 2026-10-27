@@ -74,5 +74,8 @@ ExternalPlayerType detectExternalPlayerType(String path) {
   if (base.contains('mpv')) return ExternalPlayerType.mpv;
   if (base.contains('potplayer')) return ExternalPlayerType.potPlayer;
   if (base.contains('vlc')) return ExternalPlayerType.vlc;
+  if (base.contains('mpc-be') || base.contains('mpcbe')) {
+    return ExternalPlayerType.mpcBe;
+  }
   return ExternalPlayerType.generic;
 }
