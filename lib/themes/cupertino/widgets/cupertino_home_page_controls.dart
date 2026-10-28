@@ -135,7 +135,6 @@ extension _CupertinoHomePageControls on _DashboardHomePageState {
                 imageUrl: _getDandanGroupImage,
                 itemTitle: (item) => item.title,
                 subtitle: (item) => '${item.episodeCount} 集',
-                rating: (item) => double.tryParse(item.communityRating ?? ''),
                 onTap: _onDandanplayGroupTap,
                 action: showAll
                     ? _buildCupertinoHomeIconButton(
@@ -186,7 +185,7 @@ extension _CupertinoHomePageControls on _DashboardHomePageState {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Icon(
-              cupertino.CupertinoIcons.folder_badge_gearshape,
+              cupertino.CupertinoIcons.folder_fill,
               size: 56,
               color: cupertino.CupertinoColors.systemGrey3,
             ),
