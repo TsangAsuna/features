@@ -1,0 +1,19 @@
+name: Build iOS sideload (unsigned)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-ios-sideload-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned iOS IPA
+    uses: ./.github/workflows/build-ios.yml
+    with:
+      upload-to-app-store: false
+    secrets: inherit
