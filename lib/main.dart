@@ -832,7 +832,7 @@ Future<void> _bootstrap(List<String> args) async {
           ],
           child: DesktopMultiWindowHost(
             child: NipaPlayApp(
-              launchFilePath: widget.launchFilePath,
+              launchFilePath: launchFilePath,
               startupScriptPath: startupScriptPath,
               startupCommandError: startupCommandError,
             ),
