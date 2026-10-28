@@ -122,6 +122,15 @@ import 'package:nipaplay_core/rust/rust_init.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = globals.navigatorKey;
 
+/// 启动期日志实例：runZonedGuarded 的回调无法访问 _bootstrap 的局部变量，
+/// 通过全局引用把未捕获异常写入同一份文件日志（白屏诊断通道）。
+DebugLogService? _startupLogService;
+
+void _logStartup(String message) {
+  debugPrint('[Startup] $message');
+  _startupLogService?.addLog(message, level: 'INFO', tag: 'Startup');
+}
+
 final GlobalKey<State<DefaultTabController>> tabControllerKey =
     GlobalKey<State<DefaultTabController>>();
 
@@ -175,6 +184,12 @@ void main(List<String> args) {
     (error, stack) {
       debugPrint('[Startup] 未捕获异常: $error');
       debugPrintStack(stackTrace: stack, maxFrames: 40);
+      try {
+        _startupLogService?.addError(
+          '[Startup] 未捕获异常: $error',
+          tag: 'Startup',
+        );
+      } catch (_) {}
     },
   );
 }
@@ -188,6 +203,7 @@ Future<void> _bootstrap(List<String> args) async {
   // UI 起来后可在「开发者选项」导出，release 下才有诊断依据。
   final debugLogService = DebugLogService();
   debugLogService.initialize();
+  _startupLogService = debugLogService;
   final fileLogService = FileLogService();
   try {
     await fileLogService.initialize();
@@ -230,10 +246,18 @@ Future<void> _bootstrap(List<String> args) async {
   }
   PasswordInputModeService.instance.start();
   if (!kIsWeb && globals.supportsRustNativeBridge) {
+    _logStartup('Rust 初始化开始');
     try {
-      await ensureRustInitialized();
+      await ensureRustInitialized().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          debugPrint('[Startup] Rust 初始化超时，跳过（Dart/C++ fallback）');
+        },
+      );
+      _logStartup('Rust 初始化完成');
     } catch (error) {
       debugPrint('Rust 核心初始化失败，将使用 Dart/C++ fallback: $error');
+      _logStartup('Rust 初始化失败（fallback）: $error');
     }
   }
   _installFrameTimingTrace();
@@ -250,6 +274,7 @@ Future<void> _bootstrap(List<String> args) async {
   if (globals.isPhone) {
     // shader 预热失败/挂死绝不允许挡住 runApp——那是 iOS 首页白屏的直接
     // 候选根因之一。降级为运行时再预热，玻璃效果可能略有首帧闪烁。
+    _logStartup('LiquidGlass shader 预热开始');
     try {
       await LiquidGlassWidgets.initialize().timeout(
         const Duration(seconds: 8),
@@ -257,8 +282,10 @@ Future<void> _bootstrap(List<String> args) async {
           debugPrint('[Startup] LiquidGlass shader 预热超时，跳过（运行时降级）');
         },
       );
+      _logStartup('LiquidGlass shader 预热完成');
     } catch (e) {
       debugPrint('[Startup] LiquidGlass 初始化失败，继续启动（玻璃效果降级）: $e');
+      _logStartup('LiquidGlass 初始化失败（降级）: $e');
     }
   }
   debugPaintBaselinesEnabled = false;
@@ -309,10 +336,12 @@ Future<void> _bootstrap(List<String> args) async {
   }
 
   WatchHistoryDatabase.ensureInitialized();
+  _logStartup('数据库引擎就绪');
 
   // 初始化远程控制访问保护服务
   try {
     await RemoteControlAccessGuardService.instance.loadTrustedDevices();
+    _logStartup('远程控制守卫加载完成');
   } catch (e) {
     debugPrint('[Startup] 远程控制信任设备加载失败（忽略）: $e');
   }
@@ -320,6 +349,7 @@ Future<void> _bootstrap(List<String> args) async {
   // 安装 HTTP 客户端覆盖（自签名证书信任规则），尽早生效
   try {
     await HttpClientInitializer.install();
+    _logStartup('HTTP 客户端覆盖安装完成');
   } catch (e) {
     debugPrint('[Startup] HTTP 客户端覆盖安装失败（忽略，使用默认栈）: $e');
   }
@@ -529,10 +559,12 @@ Future<void> _bootstrap(List<String> args) async {
 
   // 创建应用所需的目录结构
   await _initializeAppDirectories();
+  _logStartup('应用目录结构就绪');
 
   // 预加载播放器内核设置（失败不阻断首帧：播放入口会再次 ensure）
   try {
     await PlayerFactory.initialize();
+    _logStartup('播放器内核设置加载完成');
   } catch (e) {
     debugPrint('[Startup] 播放器内核预加载失败（忽略，播放时重试）: $e');
   }
@@ -540,6 +572,7 @@ Future<void> _bootstrap(List<String> args) async {
   // 预加载弹幕内核设置
   try {
     await DanmakuKernelFactory.initialize();
+    _logStartup('弹幕内核设置加载完成');
   } catch (e) {
     debugPrint('[Startup] 弹幕内核预加载失败（忽略）: $e');
   }
@@ -547,6 +580,7 @@ Future<void> _bootstrap(List<String> args) async {
   // 初始化插件系统覆盖设置
   try {
     await PluginService.loadDownloaderOverride();
+    _logStartup('插件覆盖设置加载完成');
   } catch (e) {
     debugPrint('[Startup] 插件覆盖设置加载失败（忽略）: $e');
   }
@@ -561,6 +595,7 @@ Future<void> _bootstrap(List<String> args) async {
   }
 
   // 并行执行初始化操作
+  _logStartup('启动服务组（弹弹play/服务提供者/设置/弹幕缓存）开始');
   await Future.wait(<Future<dynamic>>[
     // 初始化弹弹play服务
     DandanplayService.initialize(renewToken: false),
@@ -640,6 +675,7 @@ Future<void> _bootstrap(List<String> args) async {
     // 以下服务不阻塞首帧：等首帧渲染完成后再初始化（冷启动内存
     // 与启动耗时同时受益；这些服务都不在首帧渲染路径上）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _logStartup('首帧渲染完成');
       unawaited(_runDeferredStartupTask(
           'services', ServiceProvider.initializeAfterFirstFrame));
       unawaited(_runDeferredStartupTask('token', DandanplayService.loadToken));
@@ -734,6 +770,7 @@ Future<void> _bootstrap(List<String> args) async {
       });
     }
 
+    _logStartup('全部启动初始化完成，即将 runApp');
     runDesktopMultiWindowApp(
       // 图片缓存持有的是 native/external 内存，Dart GC 不会主动归还；
       // 这里挂上系统内存压力与生命周期回调，在低端设备上及时释放。
