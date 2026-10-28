@@ -167,8 +167,36 @@ Alignment _resolveStartupWindowAlignment(
   }
 }
 
-void main(List<String> args) async {
+void main(List<String> args) {
+  // 启动与运行期的任何未捕获异常都不允许静默：release 下未捕获异常只进
+  // console，现场表现为"打开即白屏"且无任何线索。统一转发到日志。
+  runZonedGuarded(
+    () => _bootstrap(args),
+    (error, stack) {
+      debugPrint('[Startup] 未捕获异常: $error');
+      debugPrintStack(stackTrace: stack, maxFrames: 40);
+    },
+  );
+}
+
+/// 真正的启动流程。独立函数便于 runZonedGuarded 包裹；每个首帧前初始化
+/// 都有失败兜底——任何一步挂掉都不允许阻断 runApp（白屏）。
+Future<void> _bootstrap(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 日志服务先于一切可能失败的初始化：后续每个阶段的失败都会被记录，
+  // UI 起来后可在「开发者选项」导出，release 下才有诊断依据。
+  final debugLogService = DebugLogService();
+  debugLogService.initialize();
+  final fileLogService = FileLogService();
+  try {
+    await fileLogService.initialize();
+    unawaited(fileLogService.start());
+  } catch (e) {
+    debugPrint('文件日志初始化失败（忽略，继续启动）: $e');
+  }
+  debugLogService.addLog('启动流程开始（加固模式：初始化失败不阻断首帧）',
+      level: 'INFO', tag: 'Startup');
   // Restore directory grants before storage, history, scanning or playback.
   if (globals.isHarmonyOS) {
     try {
@@ -209,10 +237,29 @@ void main(List<String> args) async {
     }
   }
   _installFrameTimingTrace();
-  await ensureLinuxSystemFontLoaded();
-  await globals.initializeStartupDeviceProfile();
+  try {
+    await ensureLinuxSystemFontLoaded();
+  } catch (e) {
+    debugPrint('[Startup] 系统字体加载失败（忽略，继续启动）: $e');
+  }
+  try {
+    await globals.initializeStartupDeviceProfile();
+  } catch (e) {
+    debugPrint('[Startup] 设备档案初始化失败（忽略，继续启动）: $e');
+  }
   if (globals.isPhone) {
-    await LiquidGlassWidgets.initialize();
+    // shader 预热失败/挂死绝不允许挡住 runApp——那是 iOS 首页白屏的直接
+    // 候选根因之一。降级为运行时再预热，玻璃效果可能略有首帧闪烁。
+    try {
+      await LiquidGlassWidgets.initialize().timeout(
+        const Duration(seconds: 8),
+        onTimeout: () {
+          debugPrint('[Startup] LiquidGlass shader 预热超时，跳过（运行时降级）');
+        },
+      );
+    } catch (e) {
+      debugPrint('[Startup] LiquidGlass 初始化失败，继续启动（玻璃效果降级）: $e');
+    }
   }
   debugPaintBaselinesEnabled = false;
   debugPaintSizeEnabled = false;
@@ -264,21 +311,26 @@ void main(List<String> args) async {
   WatchHistoryDatabase.ensureInitialized();
 
   // 初始化远程控制访问保护服务
-  await RemoteControlAccessGuardService.instance.loadTrustedDevices();
+  try {
+    await RemoteControlAccessGuardService.instance.loadTrustedDevices();
+  } catch (e) {
+    debugPrint('[Startup] 远程控制信任设备加载失败（忽略）: $e');
+  }
 
   // 安装 HTTP 客户端覆盖（自签名证书信任规则），尽早生效
-  await HttpClientInitializer.install();
+  try {
+    await HttpClientInitializer.install();
+  } catch (e) {
+    debugPrint('[Startup] HTTP 客户端覆盖安装失败（忽略，使用默认栈）: $e');
+  }
 
   // 初始化hotkey_manager
   if (globals.isDesktop) {
     await hotKeyManager.unregisterAll();
   }
 
-  // 初始化调试日志服务（在最前面初始化，这样可以收集启动过程的日志）
-  final debugLogService = DebugLogService();
-  debugLogService.initialize();
-  final fileLogService = FileLogService();
-  await fileLogService.initialize();
+  // 调试/文件日志服务已在 _bootstrap 最前初始化（保证后续阶段失败可被记录）。
+  // 是否写文件日志由下方用户设置决定（默认开启）。
 
   if (launchFilePath != null) {
     debugLogService.addLog('应用启动时收到命令行文件路径: $launchFilePath',
@@ -287,12 +339,16 @@ void main(List<String> args) async {
 
   // Android Intent / iOS Files 传入的视频文件。
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-    final intentFilePath = await FileAssociationService.getOpenFileUri();
-    if (intentFilePath != null &&
-        await FileAssociationService.validateFilePath(intentFilePath)) {
-      launchFilePath = intentFilePath;
-      debugLogService.addLog('应用启动时收到系统文件路径: $intentFilePath',
-          level: 'INFO', tag: 'FileAssociation');
+    try {
+      final intentFilePath = await FileAssociationService.getOpenFileUri();
+      if (intentFilePath != null &&
+          await FileAssociationService.validateFilePath(intentFilePath)) {
+        launchFilePath = intentFilePath;
+        debugLogService.addLog('应用启动时收到系统文件路径: $intentFilePath',
+            level: 'INFO', tag: 'FileAssociation');
+      }
+    } catch (e) {
+      debugPrint('[Startup] 启动文件关联读取失败（忽略）: $e');
     }
   }
 
@@ -474,14 +530,26 @@ void main(List<String> args) async {
   // 创建应用所需的目录结构
   await _initializeAppDirectories();
 
-  // 预加载播放器内核设置
-  await PlayerFactory.initialize();
+  // 预加载播放器内核设置（失败不阻断首帧：播放入口会再次 ensure）
+  try {
+    await PlayerFactory.initialize();
+  } catch (e) {
+    debugPrint('[Startup] 播放器内核预加载失败（忽略，播放时重试）: $e');
+  }
 
   // 预加载弹幕内核设置
-  await DanmakuKernelFactory.initialize();
+  try {
+    await DanmakuKernelFactory.initialize();
+  } catch (e) {
+    debugPrint('[Startup] 弹幕内核预加载失败（忽略）: $e');
+  }
 
   // 初始化插件系统覆盖设置
-  await PluginService.loadDownloaderOverride();
+  try {
+    await PluginService.loadDownloaderOverride();
+  } catch (e) {
+    debugPrint('[Startup] 插件覆盖设置加载失败（忽略）: $e');
+  }
 
   // 初始化安全书签服务 (仅限 macOS)
   if (!kIsWeb && Platform.isMacOS) {
@@ -548,7 +616,27 @@ void main(List<String> args) async {
     // 根据设置清理弹幕缓存
     _prepareDanmakuCachePolicy(),
 
-  ]).then((results) async {
+  ]).catchError((Object startupError) {
+    // 任一启动服务初始化失败都不允许阻断首帧：用默认设置继续启动，
+    // 失败详情已进文件日志，UI 恢复后可在「开发者选项」导出诊断。
+    debugPrint('[Startup] 启动初始化组失败，使用默认设置继续: $startupError');
+    debugLogService.addError(
+      '[Startup] 启动初始化组失败: $startupError',
+      tag: 'Startup',
+    );
+    return <dynamic>[
+      null, // DandanplayService.initialize（无返回值依赖）
+      <String, dynamic>{
+        'themeMode': globals.isTelevision ? 'dark' : 'system',
+        'animeDetailMode': 'simple',
+        'backgroundImageRenderMode':
+            BackgroundImageRenderMode.opacity.storageKey,
+        'backgroundImageOverlayOpacity':
+            ThemeNotifier.defaultBackgroundImageOverlayOpacity,
+      },
+      null, // 弹幕缓存清理
+    ];
+  }).then((results) async {
     // 以下服务不阻塞首帧：等首帧渲染完成后再初始化（冷启动内存
     // 与启动耗时同时受益；这些服务都不在首帧渲染路径上）。
     WidgetsBinding.instance.addPostFrameCallback((_) {

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
@@ -54,7 +55,12 @@ class UIThemeProvider extends ChangeNotifier {
   Future<void> _loadTheme() async {
     _currentThemeId = _lockedThemeId(_currentEnvironment);
     try {
-      final prefs = await SharedPreferences.getInstance();
+      // prefs 读取挂死时兜底：主界面 UI 主题选择依赖 isInitialized，
+      // 这里永不完成会让 App 永远停在 SplashScreen（浅色模式即白屏）。
+      final prefs = await SharedPreferences.getInstance().timeout(
+        const Duration(seconds: 5),
+        onTimeout: () => throw TimeoutException('SharedPreferences 超时'),
+      );
       await prefs.setString(_key, _currentThemeId);
     } catch (e) {
       debugPrint('加载UI主题设置失败: $e');
