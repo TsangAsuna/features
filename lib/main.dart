@@ -660,7 +660,8 @@ Future<void> _bootstrap(List<String> args) async {
       tag: 'Startup',
     );
     return <dynamic>[
-      null, // DandanplayService.initialize（无返回值依赖）
+      null, // [0] DandanplayService.initialize（void）
+      null, // [1] ServiceProvider.initialize（void）
       <String, dynamic>{
         'themeMode': globals.isTelevision ? 'dark' : 'system',
         'animeDetailMode': 'simple',
@@ -668,10 +669,11 @@ Future<void> _bootstrap(List<String> args) async {
             BackgroundImageRenderMode.opacity.storageKey,
         'backgroundImageOverlayOpacity':
             ThemeNotifier.defaultBackgroundImageOverlayOpacity,
-      },
-      null, // 弹幕缓存清理
+      }, // [2] 设置组
+      null, // [3] 弹幕缓存清理（void）
     ];
   }).then((results) async {
+    try {
     // 以下服务不阻塞首帧：等首帧渲染完成后再初始化（冷启动内存
     // 与启动耗时同时受益；这些服务都不在首帧渲染路径上）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -701,8 +703,11 @@ Future<void> _bootstrap(List<String> args) async {
     });
 
     // 处理主题模式设置
-    // 外层列表现在是 [ServiceProvider.initialize, 设置加载(Map), 弹幕缓存清理]
-    final settingsMap = results[1] as Map<String, dynamic>;
+    // 外层成员顺序：[Dandanplay, ServiceProvider, 设置组(Map), 弹幕缓存]。
+    // fa775d98 曾把索引错写成 results[1]（= ServiceProvider 的 void 完成
+    // 值 null），null as Map 在启动链上抛 TypeError 导致 iOS 白屏。
+    final settingsMap =
+        (results[2] as Map<String, dynamic>?) ?? const <String, dynamic>{};
     final savedThemeMode = settingsMap['themeMode'] as String? ??
         (globals.isTelevision ? 'dark' : 'system');
     final savedDetailModeString =
@@ -827,7 +832,7 @@ Future<void> _bootstrap(List<String> args) async {
           ],
           child: DesktopMultiWindowHost(
             child: NipaPlayApp(
-              launchFilePath: launchFilePath,
+              launchFilePath: widget.launchFilePath,
               startupScriptPath: startupScriptPath,
               startupCommandError: startupCommandError,
             ),
@@ -835,7 +840,28 @@ Future<void> _bootstrap(List<String> args) async {
         ),
       ),
     );
+    } catch (error, stackTrace) {
+      debugPrint('[Startup] 主界面装配失败: $error');
+      debugPrintStack(stackTrace: stackTrace, maxFrames: 40);
+      _logStartup('主界面装配失败，进入最小界面: $error');
+      _runMinimalFallbackApp();
+    }
   });
+}
+
+/// 最小界面兜底：主界面装配出现任何异常时，保证用户看到 App 而非白屏。
+/// 功能可能受限（默认主题、无 Provider），但引擎与界面链路已验证可用。
+void _runMinimalFallbackApp() {
+  try {
+    runApp(
+      const MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: SplashScreen(),
+      ),
+    );
+  } catch (e) {
+    debugPrint('[Startup] 最小界面启动失败: $e');
+  }
 }
 
 Future<void> _runDeferredStartupTask(
