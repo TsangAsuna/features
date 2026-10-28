@@ -421,8 +421,12 @@ class _CupertinoMainPageState extends State<CupertinoMainPage> {
 
         // Older iOS and other phone platforms render the same tab semantics
         // with the Flutter liquid-glass implementation.
+        // NOTE: never use fully transparent black as the scaffold background —
+        // when the bundled background image is disabled or fails to decode on
+        // iOS the whole page collapses to pure black. Fall back to the same
+        // dark base color used by BackgroundBackdrop so the page is never empty.
         return CupertinoPageScaffold(
-          backgroundColor: const Color(0x00000000),
+          backgroundColor: const Color(0xFF1E1E1E),
           child: Stack(
             fit: StackFit.expand,
             children: [

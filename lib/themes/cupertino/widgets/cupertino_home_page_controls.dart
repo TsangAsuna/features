@@ -1,5 +1,9 @@
 part of dashboard_home_page;
 
+/// Cupertino 首页弹弹play媒体库 section 单次最多展示的条目数，避免
+/// 识别出大量番剧后把首页撑得很长；剩余条目入“查看全部”。
+const int _cupertinoDandanplayHomePageSize = 6;
+
 extension _CupertinoHomePageControls on _DashboardHomePageState {
   Future<void> _refreshCupertinoHome() async {
     await Future.wait([
@@ -20,8 +24,12 @@ extension _CupertinoHomePageControls on _DashboardHomePageState {
     final sectionsProvider = context.watch<HomeSectionsSettingsProvider>();
     final sections = _buildCupertinoConfiguredSections(sectionsProvider);
 
+    // NOTE: never use fully transparent color as the Cupertino home root — when
+    // no home section has content (local/remote library empty, no remote
+    // connection) the whole page collapses to blank/black. Fall back to the
+    // same dark base color used elsewhere so the page is never empty.
     return ColoredBox(
-      color: Colors.transparent,
+      color: const Color(0xFF1E1E1E),
       child: CustomScrollView(
         controller: _mainScrollController,
         physics: const BouncingScrollPhysics(
@@ -116,14 +124,26 @@ extension _CupertinoHomePageControls on _DashboardHomePageState {
             );
           }
           if (_recentDandanplayGroups.isNotEmpty) {
+            final dandanVisible = _recentDandanplayGroups
+                .take(_cupertinoDandanplayHomePageSize)
+                .toList(growable: false);
+            final showAll = _recentDandanplayGroups.length > _cupertinoDandanplayHomePageSize;
             addSection(
               (_) => _buildCupertinoMediaSection<DandanplayRemoteAnimeGroup>(
                 title: '弹弹play - 最近添加',
-                items: _recentDandanplayGroups,
+                items: dandanVisible,
                 imageUrl: _getDandanGroupImage,
                 itemTitle: (item) => item.title,
                 subtitle: (item) => '${item.episodeCount} 集',
+                rating: (item) => double.tryParse(item.communityRating ?? ''),
                 onTap: _onDandanplayGroupTap,
+                action: showAll
+                    ? _buildCupertinoHomeIconButton(
+                        label: '查看全部弹弹媒体库',
+                        icon: cupertino.CupertinoIcons.list_bullet,
+                        onPressed: _onDandanplayShowAllPressed,
+                      )
+                    : null,
               ),
             );
           }
@@ -143,7 +163,86 @@ extension _CupertinoHomePageControls on _DashboardHomePageState {
           break;
       }
     }
+
+    // 当没有任何 section 有内容时（本地/远程库均为空、未连接远程服务器、
+    // 弹弹无数据），首页只剩下 hero 会呈现空白。在此渲染一个空态占位
+    // 并给出“添加媒体库”的入口，避免用户误以为媒体库识别后首页仍空。
+    if (slivers.isEmpty) {
+      slivers.add(
+        SliverToBoxAdapter(
+          child: _buildCupertinoEmptyLibrarySection(),
+        ),
+      );
+    }
+
     return slivers;
+  }
+
+  Widget _buildCupertinoEmptyLibrarySection() {
+    return SizedBox(
+      height: 260,
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              cupertino.CupertinoIcons.folder_badge_gearshape,
+              size: 56,
+              color: cupertino.CupertinoColors.systemGrey3,
+            ),
+            const SizedBox(height: 16),
+            Text(
+              '媒体库尚未添加',
+              style: const TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: cupertino.CupertinoColors.label,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '在“库管理”中添加本地文件夹、WebDAV/SMB 或 Emby/Jellyfin，\n'
+              '识别完成后会出现在此页。',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                color: cupertino.CupertinoColors.secondaryLabel,
+              ),
+            ),
+            const SizedBox(height: 20),
+            cupertino.CupertinoButton.filled(
+              onPressed: _onAddMediaLibraryPressed,
+              child: const Text('添加媒体库'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _onAddMediaLibraryPressed() async {
+    // 跳转到库管理页；由上层 DashboardHomePage 暴露统一入口。
+    // 这里通过命名路由打开媒体库管理页面。
+    try {
+      await Navigator.of(context).pushNamed('/media-library-management');
+    } catch (_) {
+      // 路由未注册时静默忽略，避免首页因缺少入口而崩溃；
+      // 调用方应在 onGenerateRoute 中注册该路由。
+    }
+  }
+
+  Future<void> _onDandanplayShowAllPressed() async {
+    // 打开全部弹弹play媒体库列表。优先走命名路由；未注册时降级为
+    // 提示用户到“库管理”查看，避免首页因缺少入口而报错。
+    try {
+      await Navigator.of(context).pushNamed('/dandanplay-library');
+    } catch (_) {
+      try {
+        await Navigator.of(context).pushNamed('/media-library-management');
+      } catch (__) {
+        // 两条路由均未注册时静默忽略，首页保持可用。
+      }
+    }
   }
 
   Widget _buildCupertinoHero() {
