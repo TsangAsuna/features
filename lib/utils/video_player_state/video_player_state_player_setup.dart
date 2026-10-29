@@ -697,8 +697,25 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         int? preferredSubtitleIndex;
 
         // 定义简体和繁体中文的关键字
-        const simplifiedKeywords = ['简体', '简中', 'chs', 'sc', 'simplified'];
-        const traditionalKeywords = ['繁體', '繁体', 'cht', 'tc', 'traditional'];
+        // 简日/繁日：双语轨命名（简体+日语 / 繁体+日语，Kamigami 等字组常用），
+        // 不加入就无法为这类 release 正确默认简中/繁中。
+        const simplifiedKeywords = [
+          '简体',
+          '简中',
+          '简日',
+          'chs',
+          'sc',
+          'simplified',
+        ];
+        const traditionalKeywords = [
+          '繁體',
+          '繁体',
+          '繁中',
+          '繁日',
+          'cht',
+          'tc',
+          'traditional',
+        ];
 
         // 获取当前程序语言设置（从设置中读取）
         bool isTraditionalChinese = false;
@@ -730,7 +747,9 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         // 优先级 1: 查找首选语言的字幕轨道
         for (var i = 0; i < subtitles.length; i++) {
           final track = subtitles[i];
-          final fullString = track.toString().toLowerCase();
+          // title 可能承载繁简/双语线索（繁日/简日/原盘中字…），language 可能
+          // 被 adapter 翻译为"中文"；只 toString() 不保证包含这些信息。
+          final fullString = _trackSearchHaystack(track);
           if (primaryKeywords.any((kw) => fullString.contains(kw))) {
             preferredSubtitleIndex = i;
             debugPrint(
@@ -744,7 +763,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         if (preferredSubtitleIndex == null) {
           for (var i = 0; i < subtitles.length; i++) {
             final track = subtitles[i];
-            final fullString = track.toString().toLowerCase();
+            final fullString = _trackSearchHaystack(track);
             if (secondaryKeywords.any((kw) => fullString.contains(kw))) {
               preferredSubtitleIndex = i;
               debugPrint(
@@ -759,7 +778,13 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         if (preferredSubtitleIndex == null) {
           for (var i = 0; i < subtitles.length; i++) {
             final track = subtitles[i];
-            if (track.language == 'chi' || track.language == 'zho') {
+            // media_kit adapter 会把 chi 翻译成"中文"放进 language，
+            // 只匹配 chi/zho 会永远落空、退到"第一条"（可能是繁体轨）。
+            final lang = (track.language ?? '').toLowerCase();
+            if (lang == 'chi' ||
+                lang == 'zho' ||
+                lang == 'zh' ||
+                lang.contains('中文')) {
               preferredSubtitleIndex = i;
               debugPrint(
                 'VideoPlayerState: 自动选择语言代码为中文的字幕: ${track.title ?? track.toString().toLowerCase()}',
@@ -786,8 +811,7 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
         }
 
         // 如果找到了优先的字幕轨道，就激活它
-        if (preferredSubtitleIndex != null) {
-          player.activeSubtitleTracks = [preferredSubtitleIndex];
+        if (preferredSubtitleIndex != null) {          player.activeSubtitleTracks = [preferredSubtitleIndex];
           // 记录为"最后选中的内嵌轨"：取消外挂轨后回退内嵌时用它，
           // 否则 restore 落在 0 号轨道（可能不是字幕轨），内嵌回不来
           // 且位置滑块对着空轨道不生效。
@@ -1757,4 +1781,26 @@ extension VideoPlayerStatePlayerSetup on VideoPlayerState {
       //debugPrint('初始化观看记录时出错: $e\n$s');
     }
   }
+}
+
+/// 字幕轨道繁简/语言匹配的完整搜索串：title 承载繁简双语线索
+/// （繁日/简日/原盘中字…），language 可能已被 adapter 翻译成"中文"；
+/// 仅 track.toString() 不保证包含这些信息，逐字段拼接兜底。
+String _trackSearchHaystack(dynamic track) {
+  final buffer = StringBuffer((track.title ?? '').toLowerCase())
+    ..write(' ')
+    ..write((track.language ?? '').toLowerCase());
+  try {
+    track.metadata.forEach((key, value) {
+      buffer
+        ..write(' ')
+        ..write(key.toString().toLowerCase())
+        ..write(' ')
+        ..write(value.toString().toLowerCase());
+    });
+  } catch (_) {}
+  buffer
+    ..write(' ')
+    ..write(track.toString().toLowerCase());
+  return buffer.toString();
 }

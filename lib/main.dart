@@ -122,6 +122,15 @@ import 'package:nipaplay_core/rust/rust_init.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = globals.navigatorKey;
 
+/// 启动期日志实例：runZonedGuarded 的回调无法访问 _bootstrap 的局部变量，
+/// 通过全局引用把未捕获异常写入同一份文件日志（白屏诊断通道）。
+DebugLogService? _startupLogService;
+
+void _logStartup(String message) {
+  debugPrint('[Startup] $message');
+  _startupLogService?.addLog(message, level: 'INFO', tag: 'Startup');
+}
+
 final GlobalKey<State<DefaultTabController>> tabControllerKey =
     GlobalKey<State<DefaultTabController>>();
 
@@ -167,8 +176,43 @@ Alignment _resolveStartupWindowAlignment(
   }
 }
 
-void main(List<String> args) async {
+void main(List<String> args) {
+  // 启动与运行期的任何未捕获异常都不允许静默：release 下未捕获异常只进
+  // console，现场表现为"打开即白屏"且无任何线索。统一转发到日志。
+  runZonedGuarded(
+    () => _bootstrap(args),
+    (error, stack) {
+      debugPrint('[Startup] 未捕获异常: $error');
+      debugPrintStack(stackTrace: stack, maxFrames: 40);
+      try {
+        _startupLogService?.addError(
+          '[Startup] 未捕获异常: $error',
+          tag: 'Startup',
+        );
+      } catch (_) {}
+    },
+  );
+}
+
+/// 真正的启动流程。独立函数便于 runZonedGuarded 包裹；每个首帧前初始化
+/// 都有失败兜底——任何一步挂掉都不允许阻断 runApp（白屏）。
+Future<void> _bootstrap(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // 日志服务先于一切可能失败的初始化：后续每个阶段的失败都会被记录，
+  // UI 起来后可在「开发者选项」导出，release 下才有诊断依据。
+  final debugLogService = DebugLogService();
+  debugLogService.initialize();
+  _startupLogService = debugLogService;
+  final fileLogService = FileLogService();
+  try {
+    await fileLogService.initialize();
+    unawaited(fileLogService.start());
+  } catch (e) {
+    debugPrint('文件日志初始化失败（忽略，继续启动）: $e');
+  }
+  debugLogService.addLog('启动流程开始（加固模式：初始化失败不阻断首帧）',
+      level: 'INFO', tag: 'Startup');
   // Restore directory grants before storage, history, scanning or playback.
   if (globals.isHarmonyOS) {
     try {
@@ -202,17 +246,47 @@ void main(List<String> args) async {
   }
   PasswordInputModeService.instance.start();
   if (!kIsWeb && globals.supportsRustNativeBridge) {
+    _logStartup('Rust 初始化开始');
     try {
-      await ensureRustInitialized();
+      await ensureRustInitialized().timeout(
+        const Duration(seconds: 15),
+        onTimeout: () {
+          debugPrint('[Startup] Rust 初始化超时，跳过（Dart/C++ fallback）');
+        },
+      );
+      _logStartup('Rust 初始化完成');
     } catch (error) {
       debugPrint('Rust 核心初始化失败，将使用 Dart/C++ fallback: $error');
+      _logStartup('Rust 初始化失败（fallback）: $error');
     }
   }
   _installFrameTimingTrace();
-  await ensureLinuxSystemFontLoaded();
-  await globals.initializeStartupDeviceProfile();
+  try {
+    await ensureLinuxSystemFontLoaded();
+  } catch (e) {
+    debugPrint('[Startup] 系统字体加载失败（忽略，继续启动）: $e');
+  }
+  try {
+    await globals.initializeStartupDeviceProfile();
+  } catch (e) {
+    debugPrint('[Startup] 设备档案初始化失败（忽略，继续启动）: $e');
+  }
   if (globals.isPhone) {
-    await LiquidGlassWidgets.initialize();
+    // shader 预热失败/挂死绝不允许挡住 runApp——那是 iOS 首页白屏的直接
+    // 候选根因之一。降级为运行时再预热，玻璃效果可能略有首帧闪烁。
+    _logStartup('LiquidGlass shader 预热开始');
+    try {
+      await LiquidGlassWidgets.initialize().timeout(
+        const Duration(seconds: 8),
+        onTimeout: () {
+          debugPrint('[Startup] LiquidGlass shader 预热超时，跳过（运行时降级）');
+        },
+      );
+      _logStartup('LiquidGlass shader 预热完成');
+    } catch (e) {
+      debugPrint('[Startup] LiquidGlass 初始化失败，继续启动（玻璃效果降级）: $e');
+      _logStartup('LiquidGlass 初始化失败（降级）: $e');
+    }
   }
   debugPaintBaselinesEnabled = false;
   debugPaintSizeEnabled = false;
@@ -262,23 +336,31 @@ void main(List<String> args) async {
   }
 
   WatchHistoryDatabase.ensureInitialized();
+  _logStartup('数据库引擎就绪');
 
   // 初始化远程控制访问保护服务
-  await RemoteControlAccessGuardService.instance.loadTrustedDevices();
+  try {
+    await RemoteControlAccessGuardService.instance.loadTrustedDevices();
+    _logStartup('远程控制守卫加载完成');
+  } catch (e) {
+    debugPrint('[Startup] 远程控制信任设备加载失败（忽略）: $e');
+  }
 
   // 安装 HTTP 客户端覆盖（自签名证书信任规则），尽早生效
-  await HttpClientInitializer.install();
+  try {
+    await HttpClientInitializer.install();
+    _logStartup('HTTP 客户端覆盖安装完成');
+  } catch (e) {
+    debugPrint('[Startup] HTTP 客户端覆盖安装失败（忽略，使用默认栈）: $e');
+  }
 
   // 初始化hotkey_manager
   if (globals.isDesktop) {
     await hotKeyManager.unregisterAll();
   }
 
-  // 初始化调试日志服务（在最前面初始化，这样可以收集启动过程的日志）
-  final debugLogService = DebugLogService();
-  debugLogService.initialize();
-  final fileLogService = FileLogService();
-  await fileLogService.initialize();
+  // 调试/文件日志服务已在 _bootstrap 最前初始化（保证后续阶段失败可被记录）。
+  // 是否写文件日志由下方用户设置决定（默认开启）。
 
   if (launchFilePath != null) {
     debugLogService.addLog('应用启动时收到命令行文件路径: $launchFilePath',
@@ -287,12 +369,16 @@ void main(List<String> args) async {
 
   // Android Intent / iOS Files 传入的视频文件。
   if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-    final intentFilePath = await FileAssociationService.getOpenFileUri();
-    if (intentFilePath != null &&
-        await FileAssociationService.validateFilePath(intentFilePath)) {
-      launchFilePath = intentFilePath;
-      debugLogService.addLog('应用启动时收到系统文件路径: $intentFilePath',
-          level: 'INFO', tag: 'FileAssociation');
+    try {
+      final intentFilePath = await FileAssociationService.getOpenFileUri();
+      if (intentFilePath != null &&
+          await FileAssociationService.validateFilePath(intentFilePath)) {
+        launchFilePath = intentFilePath;
+        debugLogService.addLog('应用启动时收到系统文件路径: $intentFilePath',
+            level: 'INFO', tag: 'FileAssociation');
+      }
+    } catch (e) {
+      debugPrint('[Startup] 启动文件关联读取失败（忽略）: $e');
     }
   }
 
@@ -473,15 +559,31 @@ void main(List<String> args) async {
 
   // 创建应用所需的目录结构
   await _initializeAppDirectories();
+  _logStartup('应用目录结构就绪');
 
-  // 预加载播放器内核设置
-  await PlayerFactory.initialize();
+  // 预加载播放器内核设置（失败不阻断首帧：播放入口会再次 ensure）
+  try {
+    await PlayerFactory.initialize();
+    _logStartup('播放器内核设置加载完成');
+  } catch (e) {
+    debugPrint('[Startup] 播放器内核预加载失败（忽略，播放时重试）: $e');
+  }
 
   // 预加载弹幕内核设置
-  await DanmakuKernelFactory.initialize();
+  try {
+    await DanmakuKernelFactory.initialize();
+    _logStartup('弹幕内核设置加载完成');
+  } catch (e) {
+    debugPrint('[Startup] 弹幕内核预加载失败（忽略）: $e');
+  }
 
   // 初始化插件系统覆盖设置
-  await PluginService.loadDownloaderOverride();
+  try {
+    await PluginService.loadDownloaderOverride();
+    _logStartup('插件覆盖设置加载完成');
+  } catch (e) {
+    debugPrint('[Startup] 插件覆盖设置加载失败（忽略）: $e');
+  }
 
   // 初始化安全书签服务 (仅限 macOS)
   if (!kIsWeb && Platform.isMacOS) {
@@ -493,6 +595,7 @@ void main(List<String> args) async {
   }
 
   // 并行执行初始化操作
+  _logStartup('启动服务组（弹弹play/服务提供者/设置/弹幕缓存）开始');
   await Future.wait(<Future<dynamic>>[
     // 初始化弹弹play服务
     DandanplayService.initialize(renewToken: false),
@@ -548,10 +651,33 @@ void main(List<String> args) async {
     // 根据设置清理弹幕缓存
     _prepareDanmakuCachePolicy(),
 
-  ]).then((results) async {
+  ]).catchError((Object startupError) {
+    // 任一启动服务初始化失败都不允许阻断首帧：用默认设置继续启动，
+    // 失败详情已进文件日志，UI 恢复后可在「开发者选项」导出诊断。
+    debugPrint('[Startup] 启动初始化组失败，使用默认设置继续: $startupError');
+    debugLogService.addError(
+      '[Startup] 启动初始化组失败: $startupError',
+      tag: 'Startup',
+    );
+    return <dynamic>[
+      null, // [0] DandanplayService.initialize（void）
+      null, // [1] ServiceProvider.initialize（void）
+      <String, dynamic>{
+        'themeMode': globals.isTelevision ? 'dark' : 'system',
+        'animeDetailMode': 'simple',
+        'backgroundImageRenderMode':
+            BackgroundImageRenderMode.opacity.storageKey,
+        'backgroundImageOverlayOpacity':
+            ThemeNotifier.defaultBackgroundImageOverlayOpacity,
+      }, // [2] 设置组
+      null, // [3] 弹幕缓存清理（void）
+    ];
+  }).then((results) async {
+    try {
     // 以下服务不阻塞首帧：等首帧渲染完成后再初始化（冷启动内存
     // 与启动耗时同时受益；这些服务都不在首帧渲染路径上）。
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _logStartup('首帧渲染完成');
       unawaited(_runDeferredStartupTask(
           'services', ServiceProvider.initializeAfterFirstFrame));
       unawaited(_runDeferredStartupTask('token', DandanplayService.loadToken));
@@ -577,8 +703,11 @@ void main(List<String> args) async {
     });
 
     // 处理主题模式设置
-    // 外层列表现在是 [ServiceProvider.initialize, 设置加载(Map), 弹幕缓存清理]
-    final settingsMap = results[1] as Map<String, dynamic>;
+    // 外层成员顺序：[Dandanplay, ServiceProvider, 设置组(Map), 弹幕缓存]。
+    // fa775d98 曾把索引错写成 results[1]（= ServiceProvider 的 void 完成
+    // 值 null），null as Map 在启动链上抛 TypeError 导致 iOS 白屏。
+    final settingsMap =
+        (results[2] as Map<String, dynamic>?) ?? const <String, dynamic>{};
     final savedThemeMode = settingsMap['themeMode'] as String? ??
         (globals.isTelevision ? 'dark' : 'system');
     final savedDetailModeString =
@@ -646,6 +775,7 @@ void main(List<String> args) async {
       });
     }
 
+    _logStartup('全部启动初始化完成，即将 runApp');
     runDesktopMultiWindowApp(
       // 图片缓存持有的是 native/external 内存，Dart GC 不会主动归还；
       // 这里挂上系统内存压力与生命周期回调，在低端设备上及时释放。
@@ -710,7 +840,28 @@ void main(List<String> args) async {
         ),
       ),
     );
+    } catch (error, stackTrace) {
+      debugPrint('[Startup] 主界面装配失败: $error');
+      debugPrintStack(stackTrace: stackTrace, maxFrames: 40);
+      _logStartup('主界面装配失败，进入最小界面: $error');
+      _runMinimalFallbackApp();
+    }
   });
+}
+
+/// 最小界面兜底：主界面装配出现任何异常时，保证用户看到 App 而非白屏。
+/// 功能可能受限（默认主题、无 Provider），但引擎与界面链路已验证可用。
+void _runMinimalFallbackApp() {
+  try {
+    runApp(
+      const MaterialApp(
+        debugShowCheckedModeBanner: false,
+        home: SplashScreen(),
+      ),
+    );
+  } catch (e) {
+    debugPrint('[Startup] 最小界面启动失败: $e');
+  }
 }
 
 Future<void> _runDeferredStartupTask(

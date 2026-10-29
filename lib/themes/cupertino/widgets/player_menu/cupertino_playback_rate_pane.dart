@@ -1,3 +1,4 @@
+import 'package:flutter/services.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_imports.dart';
 import 'package:nipaplay/themes/cupertino/cupertino_adaptive_platform_ui.dart'
     show AdaptiveButton, AdaptiveButtonStyle;
@@ -19,13 +20,36 @@ class CupertinoPlaybackRatePane extends StatefulWidget {
 class _CupertinoPlaybackRatePaneState extends State<CupertinoPlaybackRatePane> {
   final TextEditingController _customRateController = TextEditingController();
   final FocusNode _customRateFocus = FocusNode();
+  final ScrollController _scrollController = ScrollController();
   bool _customRateDirty = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _customRateFocus.addListener(_onCustomRateFocusChanged);
+  }
 
   @override
   void dispose() {
     _customRateController.dispose();
+    _customRateFocus.removeListener(_onCustomRateFocusChanged);
     _customRateFocus.dispose();
+    _scrollController.dispose();
     super.dispose();
+  }
+
+  void _onCustomRateFocusChanged() {
+    if (_customRateFocus.hasFocus && _scrollController.hasClients) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_customRateFocus.hasFocus) return;
+        // 键盘弹出后，滚动到列表底部，使手动输入框与“应用”按钮保持在键盘上方可见
+        _scrollController.animateTo(
+          _scrollController.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeOut,
+        );
+      });
+    }
   }
 
   String _trimTrailingZeros(String value) {
@@ -103,6 +127,7 @@ class _CupertinoPlaybackRatePaneState extends State<CupertinoPlaybackRatePane> {
     _syncCustomRateController(controller);
 
     return CupertinoBottomSheetContentLayout(
+      controller: _scrollController,
       sliversBuilder: (context, topSpacing) => [
         SliverPadding(
           padding: EdgeInsets.fromLTRB(20, topSpacing, 20, 12),
@@ -145,7 +170,7 @@ class _CupertinoPlaybackRatePaneState extends State<CupertinoPlaybackRatePane> {
           ),
         ),
         SliverPadding(
-          padding: const EdgeInsets.only(bottom: 24),
+          padding: EdgeInsets.only(bottom: 24 + MediaQuery.viewInsetsOf(context).bottom),
           sliver: SliverList(
             delegate: SliverChildListDelegate.fixed([
               AdaptivePlayerMenuSection(
@@ -164,12 +189,18 @@ class _CupertinoPlaybackRatePaneState extends State<CupertinoPlaybackRatePane> {
                             signed: false,
                             decimal: true,
                           ),
+                          textInputAction: TextInputAction.done,
+                          onSubmitted: (_) => _applyCustomRate(controller),
+                          inputFormatters: [
+                            FilteringTextInputFormatter.allow(
+                              RegExp(r'[0-9.]'),
+                            ),
+                          ],
                           suffix: const Padding(
                             padding: EdgeInsets.only(right: 10),
                             child: Text('x'),
                           ),
                           onChanged: _handleCustomRateChanged,
-                          onSubmitted: (_) => _applyCustomRate(controller),
                         ),
                         const SizedBox(height: 8),
                         Text(

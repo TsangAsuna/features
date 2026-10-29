@@ -420,7 +420,11 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
   }
 
   void togglePlayPause() {
-    if (_status == PlayerStatus.playing) {
+    // 以内核真实状态为准：_status 可能被弹幕加载（recognizing）或内核
+    // paused 事件重置，只看 _status 会在"内核在播但 _status 卡 paused"时
+    // 永远走 play 分支，表现为双击无法暂停（用户实测）。
+    final bool kernelPlaying = player.state == PlaybackState.playing;
+    if (_status == PlayerStatus.playing || kernelPlaying) {
       pause();
     } else {
       play();
@@ -513,7 +517,10 @@ extension VideoPlayerStatePlaybackControls on VideoPlayerState {
 
   void pause() {
     _playbackIntentGeneration++;
-    if (_status == PlayerStatus.playing) {
+    // 守卫放宽：内核在播但 _status 卡 paused 时（状态同步丢失）也必须能暂停，
+    // 否则 toggle 永远走 play 分支、控件卡在暂停图标（用户实测）。
+    final bool kernelPlaying = player.state == PlaybackState.playing;
+    if (_status == PlayerStatus.playing || kernelPlaying) {
       final bool isWindowsMediaKit = !kIsWeb &&
           Platform.isWindows &&
           player.getPlayerKernelName() == 'Media Kit';

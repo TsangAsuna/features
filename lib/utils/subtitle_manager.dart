@@ -2394,8 +2394,15 @@ class SubtitleManager extends ChangeNotifier {
         originalTitleFromAdapter.toLowerCase() != 'n/a') {
       String langFromOrigTitle = getLanguageName(originalTitleFromAdapter);
       if (langFromOrigTitle != originalTitleFromAdapter) {
-        displayTitle = langFromOrigTitle;
         determinedLanguage = langFromOrigTitle;
+        // 标题形如 "语言 (后缀)"（如 "中文 (繁日)"）：getLanguageName 只提取
+        // 出前缀语言名，直接覆盖会把括号里的繁简/双语线索（繁日/简日）洗掉，
+        // 多条中文字幕轨在 UI 上就重名了。此时保留完整原标题作显示名。
+        if (originalTitleFromAdapter.trim().startsWith(langFromOrigTitle)) {
+          displayTitle = originalTitleFromAdapter;
+        } else {
+          displayTitle = langFromOrigTitle;
+        }
       } else {
         displayTitle = originalTitleFromAdapter;
         if (determinedLanguage == "未知") {

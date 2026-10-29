@@ -145,7 +145,10 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
         DanmakuKernelFactory.activePluginRenderer != null ||
         DanmakuKernelFactory.getKernelType() ==
             DanmakuRenderEngine.nipaplayNext;
-    return ValueListenableBuilder<double>(
+    // RepaintBoundary 隔离弹幕绘制层：打开设置菜单/控制栏等触发本子树
+    // rebuild 时，弹幕画布不随父层重绘（既定的防闪烁方案）。
+    return RepaintBoundary(
+      child: ValueListenableBuilder<double>(
       valueListenable: videoState.playbackTimeMs,
       child: DanmakuOverlay(
         key: ValueKey(
@@ -176,6 +179,7 @@ class _VideoPlayerUIState extends State<VideoPlayerUI>
           opacity: videoState.mappedDanmakuOpacity,
         );
       },
+      ),
     );
   }
 
