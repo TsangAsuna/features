@@ -33,6 +33,20 @@ class EpisodeFileSelectionService {
     PlayableItem requested, {
     bool Function()? isCancelled,
   }) async {
+    // features 分支决策（用户确认）：选择剧集即播放所点的那个文件，
+    // 不再弹出"此剧集匹配了多个视频文件"选择器（上游 1.11.x 新行为在
+    // features 工作流中多此一举）。短路后不做任何历史匹配查询——未启用
+    // 媒体库（弹弹play 远程/WebDAV/SMB）的历史条目也就不会再被检测和提示。
+    // 上游实现保留于 resolve()/EpisodeFileSelectionDialog，便于将来合并。
+    return requested;
+  }
+
+  @Deprecated('features 分支禁用多文件选择器；保留上游实现仅供合并参考')
+  static Future<PlayableItem?> selectUpstream(
+    BuildContext context,
+    PlayableItem requested, {
+    bool Function()? isCancelled,
+  }) async {
     try {
       return await EpisodeFileSelectionService().resolve(
         requested,
