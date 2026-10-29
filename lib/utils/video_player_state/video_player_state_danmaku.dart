@@ -341,9 +341,27 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
       }
 
       // 从缓存加载弹幕
-      final cachedDanmaku =
-          await DanmakuCacheManager.getDanmakuFromCache(episodeId);
-      if (!canContinue()) return;
+      // 超时兜底：缓存读取走全局 _serialized 串行队列，任何前序操作挂死
+      // 都会让这里永远排队（用户实测弹幕加载在"更新内部弹幕ID状态"后
+      // 静默中断，两次均无后续日志）。超时后走网络加载而非永久卡死。
+      List<dynamic>? cachedDanmaku;
+      try {
+        cachedDanmaku = await DanmakuCacheManager.getDanmakuFromCache(episodeId)
+            .timeout(const Duration(seconds: 5), onTimeout: () {
+          debugPrint('[弹幕诊断] 缓存查询超时(5s)，跳过缓存直接走网络加载');
+          return null;
+        });
+      } catch (cacheError) {
+        debugPrint('[弹幕诊断] 缓存查询异常(继续网络加载): $cacheError');
+        cachedDanmaku = null;
+      }
+      if (!canContinue()) {
+        debugPrint(
+            '[弹幕诊断] 缓存查询后 canContinue=false：'
+            'disposed=$_isDisposed path变=${_currentVideoPath != targetVideoPath} '
+            'generation变=${_playbackGeneration != targetGeneration}');
+        return;
+      }
       if (cachedDanmaku != null) {
         debugPrint('从缓存中找到弹幕数据，共${cachedDanmaku.length}条');
         _setStatus(PlayerStatus.recognizing, message: '正在从缓存加载弹幕...');
@@ -410,8 +428,18 @@ extension VideoPlayerStateDanmaku on VideoPlayerState {
         return;
       }
 
-      final canDownload = await DanmakuMatchingService.instance.canAccess();
-      if (!canContinue()) return;
+      final canDownload = await DanmakuMatchingService.instance.canAccess()
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+        debugPrint('[弹幕诊断] canAccess 超时(5s)，按未登录跳过');
+        return false;
+      });
+      if (!canContinue()) {
+        debugPrint(
+            '[弹幕诊断] canAccess 后 canContinue=false：'
+            'disposed=$_isDisposed path变=${_currentVideoPath != targetVideoPath} '
+            'generation变=${_playbackGeneration != targetGeneration}');
+        return;
+      }
       if (!canDownload) {
         debugPrint('[弹幕访问] 未登录弹弹play，跳过在线弹幕下载');
         _addStatusMessage('未登录弹弹play，已跳过在线弹幕下载');
