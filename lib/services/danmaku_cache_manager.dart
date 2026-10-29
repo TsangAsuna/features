@@ -211,7 +211,11 @@ class DanmakuCacheManager {
     if (kIsWeb) return null;
     try {
       //////debugPrint('尝试从缓存获取弹幕: $episodeId');
-      if (!await isCacheValid(episodeId)) {
+      // 注意：本函数已在 _serialized 队列内执行；有效性检查必须直接调
+      // _isCacheValid。若走队列版 isCacheValid，会把检查排到自身之后形成
+      // 自死锁——队列永久堵死，后续所有弹幕缓存操作（含网络加载路径的
+      // 缓存查询）全部挂起（上游 #1004 引入，用户实测弹幕全部断链）。
+      if (!await _isCacheValid(episodeId)) {
         //////debugPrint('缓存无效');
         return null;
       }
